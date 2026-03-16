@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 use tauri::Manager;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -9,7 +8,6 @@ struct RecentFile {
     timestamp: u64,
 }
 
-// Custom commands for file operations
 #[tauri::command]
 async fn read_notebook_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path)
@@ -23,36 +21,33 @@ async fn write_notebook_file(path: String, content: String) -> Result<(), String
 }
 
 #[tauri::command]
-async fn get_recent_files() -> Result<Vec<RecentFile>, String> {
-    // Load recent files from app data directory
-    let app_dir = tauri::api::path::app_data_dir(&tauri::Config::default())
-        .ok_or("Failed to get app data directory")?;
-
+async fn get_recent_files(app: tauri::AppHandle) -> Result<Vec<RecentFile>, String> {
+    let app_dir = app.path().app_data_dir()
+        .map_err(|_| "Failed to get app data directory")?;
     let recent_files_path = app_dir.join("recent_files.json");
-
     if !recent_files_path.exists() {
         return Ok(vec![]);
     }
-
     let content = fs::read_to_string(recent_files_path)
         .map_err(|e| format!("Failed to read recent files: {}", e))?;
-
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse recent files: {}", e))
 }
 
 #[tauri::command]
-async fn add_recent_file(path: String, name: String, timestamp: u64) -> Result<(), String> {
-    let app_dir = tauri::api::path::app_data_dir(&tauri::Config::default())
-        .ok_or("Failed to get app data directory")?;
-
+async fn add_recent_file(
+    app: tauri::AppHandle,
+    path: String,
+    name: String,
+    timestamp: u64,
+) -> Result<(), String> {
+    let app_dir = app.path().app_data_dir()
+        .map_err(|_| "Failed to get app data directory")?;
     if !app_dir.exists() {
         fs::create_dir_all(&app_dir)
             .map_err(|e| format!("Failed to create app directory: {}", e))?;
     }
-
     let recent_files_path = app_dir.join("recent_files.json");
-
     let mut recent_files = if recent_files_path.exists() {
         let content = fs::read_to_string(&recent_files_path)
             .map_err(|e| format!("Failed to read recent files: {}", e))?;
@@ -60,43 +55,28 @@ async fn add_recent_file(path: String, name: String, timestamp: u64) -> Result<(
     } else {
         vec![]
     };
-
-    // Remove existing entry if present
     recent_files.retain(|f| f.path != path);
-
-    // Add new entry at the beginning
-    recent_files.insert(0, RecentFile {
-        path,
-        name,
-        timestamp,
-    });
-
-    // Keep only the 10 most recent
+    recent_files.insert(0, RecentFile { path, name, timestamp });
     recent_files.truncate(10);
-
     let content = serde_json::to_string(&recent_files)
         .map_err(|e| format!("Failed to serialize recent files: {}", e))?;
-
     fs::write(recent_files_path, content)
         .map_err(|e| format!("Failed to write recent files: {}", e))
 }
 
 #[tauri::command]
-async fn get_default_save_directory() -> Result<String, String> {
-    let documents_dir = tauri::api::path::document_dir()
-        .ok_or("Failed to get documents directory")?;
-
+async fn get_default_save_directory(app: tauri::AppHandle) -> Result<String, String> {
+    let documents_dir = app.path().document_dir()
+        .map_err(|_| "Failed to get documents directory")?;
     let notebooks_dir = documents_dir.join("Tangent Notebooks");
-
     if !notebooks_dir.exists() {
         fs::create_dir_all(&notebooks_dir)
             .map_err(|e| format!("Failed to create notebooks directory: {}", e))?;
     }
-
     notebooks_dir
         .to_str()
+        .map(|s: &str| s.to_string())
         .ok_or("Failed to convert path to string".to_string())
-        .map(|s| s.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
