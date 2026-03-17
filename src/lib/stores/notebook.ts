@@ -1,5 +1,6 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import type { Notebook, NotebookCell, NotebookFile } from '../types/notebook';
+import { saveToLocalStorage } from '../utils/webPersistence';
 
 // Current notebook being edited
 export const currentNotebook = writable<Notebook | null>(null);
@@ -17,6 +18,42 @@ export const notebookDirty = writable(false);
 
 // Current file path (for Tauri)
 export const currentFilePath = writable<string | null>(null);
+
+// Execution order counter
+let executionCounter = 0;
+
+export function getNextExecutionOrder(): number {
+  return ++executionCounter;
+}
+
+export function resetExecutionCounter(): void {
+  executionCounter = 0;
+}
+
+// Undo stack for deleted cells
+interface DeletedCellEntry {
+  cell: NotebookCell;
+  index: number;
+  timestamp: number;
+}
+
+const deletedCellsStack: DeletedCellEntry[] = [];
+const MAX_UNDO_STACK = 20;
+
+export function pushDeletedCell(cell: NotebookCell, index: number): void {
+  deletedCellsStack.push({ cell, index, timestamp: Date.now() });
+  if (deletedCellsStack.length > MAX_UNDO_STACK) {
+    deletedCellsStack.shift();
+  }
+}
+
+export function popDeletedCell(): DeletedCellEntry | null {
+  return deletedCellsStack.pop() || null;
+}
+
+export function hasDeletedCells(): boolean {
+  return deletedCellsStack.length > 0;
+}
 
 // Autosave debounce timer
 let autosaveTimer: number | null = null;
@@ -42,6 +79,11 @@ function scheduleAutosave(): void {
   }
 
   autosaveTimer = window.setTimeout(() => {
+    // Save to localStorage for web persistence
+    const notebook = get(currentNotebook);
+    if (notebook) {
+      saveToLocalStorage(notebook);
+    }
     // Dispatch autosave event that the App component can listen to
     window.dispatchEvent(new CustomEvent('autosave-notebook'));
     autosaveTimer = null;
@@ -62,6 +104,7 @@ export function addToRecentFiles(path: string, name: string): void {
 // Create a new notebook
 export function createNewNotebook(): Notebook {
   const now = Date.now();
+  resetExecutionCounter();
   const notebook = {
     id: `notebook-${now}`,
     name: 'Untitled Notebook',
@@ -88,7 +131,7 @@ export function updateCellContent(notebook: Notebook, cellId: string, content: s
   markNotebookDirty();
   return {
     ...notebook,
-    cells: notebook.cells.map(cell => 
+    cells: notebook.cells.map(cell =>
       cell.id === cellId ? { ...cell, content } : cell
     ),
     updatedAt: Date.now()
@@ -102,7 +145,7 @@ export function addCellAfter(notebook: Notebook, afterCellId: string, type: 'cod
   const newCells = [...notebook.cells];
   newCells.splice(cellIndex + 1, 0, newCell);
   markNotebookDirty();
-  
+
   return {
     ...notebook,
     cells: newCells,
@@ -110,14 +153,38 @@ export function addCellAfter(notebook: Notebook, afterCellId: string, type: 'cod
   };
 }
 
-// Delete cell
+// Delete cell (with undo support)
 export function deleteCell(notebook: Notebook, cellId: string): Notebook {
   if (notebook.cells.length <= 1) return notebook; // Don't delete the last cell
+
+  const cellIndex = notebook.cells.findIndex(c => c.id === cellId);
+  if (cellIndex === -1) return notebook;
+
+  // Push to undo stack
+  pushDeletedCell(notebook.cells[cellIndex], cellIndex);
   markNotebookDirty();
-  
+
   return {
     ...notebook,
     cells: notebook.cells.filter(cell => cell.id !== cellId),
+    updatedAt: Date.now()
+  };
+}
+
+// Undo last cell deletion
+export function undoDeleteCell(notebook: Notebook): Notebook {
+  const entry = popDeletedCell();
+  if (!entry) return notebook;
+
+  const newCells = [...notebook.cells];
+  // Re-insert at original position (clamped to current length)
+  const insertIdx = Math.min(entry.index, newCells.length);
+  newCells.splice(insertIdx, 0, entry.cell);
+  markNotebookDirty();
+
+  return {
+    ...notebook,
+    cells: newCells,
     updatedAt: Date.now()
   };
 }
@@ -126,11 +193,11 @@ export function deleteCell(notebook: Notebook, cellId: string): Notebook {
 export function moveCellUp(notebook: Notebook, cellId: string): Notebook {
   const cellIndex = notebook.cells.findIndex(cell => cell.id === cellId);
   if (cellIndex <= 0) return notebook;
-  
+
   const newCells = [...notebook.cells];
   [newCells[cellIndex - 1], newCells[cellIndex]] = [newCells[cellIndex], newCells[cellIndex - 1]];
   markNotebookDirty();
-  
+
   return {
     ...notebook,
     cells: newCells,
@@ -142,11 +209,11 @@ export function moveCellUp(notebook: Notebook, cellId: string): Notebook {
 export function moveCellDown(notebook: Notebook, cellId: string): Notebook {
   const cellIndex = notebook.cells.findIndex(cell => cell.id === cellId);
   if (cellIndex >= notebook.cells.length - 1) return notebook;
-  
+
   const newCells = [...notebook.cells];
   [newCells[cellIndex], newCells[cellIndex + 1]] = [newCells[cellIndex + 1], newCells[cellIndex]];
   markNotebookDirty();
-  
+
   return {
     ...notebook,
     cells: newCells,

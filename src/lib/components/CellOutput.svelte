@@ -4,6 +4,9 @@
 
   export let output: CellOutput;
 
+  let renderError: string | null = null;
+  let copyLabel = 'Copy';
+
   function formatTimestamp(timestamp: number): string {
     return new Date(timestamp).toLocaleTimeString();
   }
@@ -25,10 +28,74 @@
     }
   }
 
-  // Action to insert a live DOM element
+  function getOutputText(): string {
+    if (output.type === 'dom') {
+      const el = output.content as Element;
+      return el?.textContent || el?.outerHTML || '';
+    }
+    return String(output.content ?? '');
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(getOutputText());
+      copyLabel = 'Copied!';
+      setTimeout(() => { copyLabel = 'Copy'; }, 1500);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement('textarea');
+      textarea.value = getOutputText();
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      copyLabel = 'Copied!';
+      setTimeout(() => { copyLabel = 'Copy'; }, 1500);
+    }
+  }
+
+  // Action to insert a live DOM element with error boundary
   function insertLiveElement(node: HTMLElement, element: Element | null) {
     if (element) {
-      node.appendChild(element);
+      try {
+        let childCount = 0;
+        const MAX_CHILDREN = 5000;
+        const observer = new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            childCount += mutation.addedNodes.length;
+            if (childCount > MAX_CHILDREN) {
+              observer.disconnect();
+              node.innerHTML = '';
+              const warning = document.createElement('pre');
+              warning.style.color = '#dc2626';
+              warning.textContent = `Output exceeded ${MAX_CHILDREN} DOM nodes and was truncated to prevent browser freeze.`;
+              node.appendChild(warning);
+              return;
+            }
+          }
+        });
+        observer.observe(node, { childList: true, subtree: true });
+
+        node.appendChild(element);
+
+        return {
+          destroy() {
+            observer.disconnect();
+            try {
+              if (element && node.contains(element)) {
+                node.removeChild(element);
+              }
+            } catch {
+              node.innerHTML = '';
+            }
+          }
+        };
+      } catch (err) {
+        renderError = `Failed to render DOM output: ${err?.message || String(err)}`;
+        return { destroy() {} };
+      }
     }
     return {
       destroy() {
@@ -96,32 +163,56 @@
 </script>
 
 <div class="output-container" data-testid="cell-output">
-  <div class="output-content {output.type}">
-    {#if output.type === 'dom'}
-      <div class="dom-output" use:insertLiveElement={output.content}></div>
-    {:else if output.type === 'html'}
-      <div class="html-output">
-        {@html output.content}
-      </div>
-    {:else if output.type === 'json' || isValidJSON(String(output.content))}
-      <div class="json-tree" use:renderJson={output.content}></div>
-    {:else if output.type === 'error'}
+  {#if renderError}
+    <div class="output-content error">
       <div class="error-output">
         <div class="error-header">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
             <circle cx="8" cy="8" r="7" fill="#fee2e2"/>
             <path d="M8 4v5M8 11v1" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/>
           </svg>
-          <span class="error-label">Error</span>
+          <span class="error-label">Render Error</span>
+          <button class="copy-btn" on:click={handleCopy}>{copyLabel}</button>
         </div>
-        <pre class="error-message"><code>{String(output.content)}</code></pre>
+        <pre class="error-message"><code>{renderError}</code></pre>
       </div>
-    {:else}
-      <pre class="text-output"><code>{String(output.content)}</code></pre>
-    {/if}
-  </div>
+    </div>
+  {:else}
+    <div class="output-content {output.type}">
+      {#if output.type === 'dom'}
+        <div class="dom-output" use:insertLiveElement={output.content}></div>
+      {:else if output.type === 'html'}
+        <div class="html-output">
+          {@html output.content}
+        </div>
+      {:else if output.type === 'json' || isValidJSON(String(output.content))}
+        <div class="json-tree" use:renderJson={output.content}></div>
+      {:else if output.type === 'error'}
+        <div class="error-output">
+          <div class="error-header">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <circle cx="8" cy="8" r="7" fill="#fee2e2"/>
+              <path d="M8 4v5M8 11v1" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="error-label">Error</span>
+            <button class="copy-btn" on:click={handleCopy}>{copyLabel}</button>
+          </div>
+          <pre class="error-message"><code>{String(output.content)}</code></pre>
+        </div>
+      {:else}
+        <pre class="text-output"><code>{String(output.content)}</code></pre>
+      {/if}
+    </div>
+  {/if}
 
   <div class="output-footer">
+    <button class="copy-btn" on:click={handleCopy} title="Copy output">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+        <path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/>
+      </svg>
+      {copyLabel}
+    </button>
     <span class="output-timestamp">{formatTimestamp(output.timestamp)}</span>
   </div>
 </div>
@@ -292,12 +383,39 @@
   .output-footer {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 0.75rem;
     padding: 0 0.25rem;
   }
 
   .output-timestamp {
     font-size: 0.75rem;
     color: #9ca3af;
+  }
+
+  .copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.45rem;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: inherit;
+  }
+
+  .copy-btn:hover {
+    background-color: #f3f4f6;
+    border-color: #9ca3af;
+    color: #1a1a1a;
+  }
+
+  .error-header .copy-btn {
+    margin-left: auto;
   }
 
   .output-content code {

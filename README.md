@@ -1,4 +1,4 @@
-# Tangent Notebooks
+# tangent/notebook
 
 A (mostly, sorry) vibe coded javascript notebook, featuring a modern sober interface, supporting data viz, on the web but local-first with a tauri app, with a Zed/deno -style notebook format in pure JavaScript.
 

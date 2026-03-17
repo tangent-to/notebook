@@ -4,6 +4,9 @@ export interface NotebookCell {
   content: string;
   output?: CellOutput;
   isRunning?: boolean;
+  executionOrder?: number;
+  collapsed?: boolean;
+  outputCollapsed?: boolean;
 }
 
 export interface CellOutput {

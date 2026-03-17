@@ -1,0 +1,122 @@
+import { describe, it, expect } from 'vitest';
+import { serializeNotebook, parseNotebook, getNotebookFilename } from '../notebookFormat';
+import type { Notebook } from '../../types/notebook';
+
+function makeNotebook(overrides: Partial<Notebook> = {}): Notebook {
+  return {
+    id: 'test-notebook',
+    name: 'Test Notebook',
+    cells: [
+      { id: 'cell-1', type: 'code', content: 'const x = 1;' },
+      { id: 'cell-2', type: 'markdown', content: '# Hello World' },
+      { id: 'cell-3', type: 'code', content: 'console.log(x)' },
+    ],
+    createdAt: 1000000,
+    updatedAt: 2000000,
+    ...overrides,
+  };
+}
+
+describe('serializeNotebook', () => {
+  it('produces valid header with title and id', () => {
+    const notebook = makeNotebook();
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('// title: Test Notebook');
+    expect(output).toContain('// id: test-notebook');
+  });
+
+  it('uses correct cell delimiters', () => {
+    const notebook = makeNotebook();
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('// %% [javascript]');
+    expect(output).toContain('// %% [markdown]');
+  });
+
+  it('wraps markdown in block comments', () => {
+    const notebook = makeNotebook();
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('/*');
+    expect(output).toContain('# Hello World');
+    expect(output).toContain('*/');
+  });
+
+  it('includes code content directly', () => {
+    const notebook = makeNotebook();
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('const x = 1;');
+    expect(output).toContain('console.log(x)');
+  });
+
+  it('handles empty cells', () => {
+    const notebook = makeNotebook({
+      cells: [{ id: 'cell-1', type: 'code', content: '' }],
+    });
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('// %% [javascript]');
+  });
+
+  it('handles notebook with only markdown', () => {
+    const notebook = makeNotebook({
+      cells: [{ id: 'cell-1', type: 'markdown', content: 'Some text' }],
+    });
+    const output = serializeNotebook(notebook);
+    expect(output).toContain('// %% [markdown]');
+    expect(output).toContain('Some text');
+  });
+});
+
+describe('parseNotebook', () => {
+  it('round-trips through serialize/parse', () => {
+    const original = makeNotebook();
+    const serialized = serializeNotebook(original);
+    const parsed = parseNotebook(serialized, 'test.js');
+
+    expect(parsed.name).toBe('Test Notebook');
+    expect(parsed.id).toBe('test-notebook');
+    expect(parsed.cells).toHaveLength(3);
+    expect(parsed.cells[0].type).toBe('code');
+    expect(parsed.cells[0].content).toBe('const x = 1;');
+    expect(parsed.cells[1].type).toBe('markdown');
+    expect(parsed.cells[1].content).toBe('# Hello World');
+    expect(parsed.cells[2].type).toBe('code');
+    expect(parsed.cells[2].content).toBe('console.log(x)');
+  });
+
+  it('creates a default cell when input is empty', () => {
+    const parsed = parseNotebook('', 'empty.js');
+    expect(parsed.cells).toHaveLength(1);
+    expect(parsed.cells[0].type).toBe('code');
+  });
+
+  it('extracts title from header', () => {
+    const content = `// ---
+// title: My Notebook
+// id: my-nb
+// ---
+
+// %% [javascript]
+42`;
+    const parsed = parseNotebook(content);
+    expect(parsed.name).toBe('My Notebook');
+    expect(parsed.id).toBe('my-nb');
+  });
+
+  it('uses filename as fallback title', () => {
+    const content = `// %% [javascript]
+hello`;
+    const parsed = parseNotebook(content, 'my-analysis.js');
+    expect(parsed.name).toBe('my-analysis');
+  });
+});
+
+describe('getNotebookFilename', () => {
+  it('generates sanitized filename', () => {
+    const nb = makeNotebook({ name: 'My Cool Notebook!' });
+    expect(getNotebookFilename(nb)).toBe('my-cool-notebook-.js');
+  });
+
+  it('handles empty name', () => {
+    const nb = makeNotebook({ name: '' });
+    expect(getNotebookFilename(nb)).toBe('untitled.js');
+  });
+});

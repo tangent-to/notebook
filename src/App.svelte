@@ -14,214 +14,94 @@
     notebookDirty,
     addCellAfter,
     createNewCell,
-    selectedCellId
+    selectedCellId,
+    undoDeleteCell,
+    resetExecutionCounter
   } from './lib/stores/notebook';
-  import { ExportService } from './lib/utils/exportService';
+  import { handleGlobalKeydown } from './lib/utils/keyboardShortcuts';
+  import { saveNotebook, parseJSNotebook, importNotebookFromFile } from './lib/utils/fileOperations';
+  import { loadFromLocalStorage, getLocalStorageMeta, saveToLocalStorage } from './lib/utils/webPersistence';
 
   let rightSidebarOpen = false;
   let chatSidebarOpen = false;
   let showExportDialog = false;
   let showCommandPalette = false;
-  const exportService = new ExportService();
+  let showRestoreBanner = false;
+  let restoreMeta: { savedAt: number; name: string; cellCount: number } | null = null;
 
   // Export function for child component to call
   export function runAllCells() {
     window.dispatchEvent(new CustomEvent('run-all-cells'));
   }
 
-  function parseJSNotebook(text, filename = 'notebook.js') {
-    const lines = text.split('\n');
-    const metadata: Record<string, string> = {};
-    const cells: any[] = [];
-    let currentCell: any = null;
-    let inMetadata = false;
-    let inMarkdown = false;
-    let markdownContent = '';
-    let codeContent = '';
-
-    const slugify = (value: string): string =>
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .trim();
-
-    const deriveDefaultName = () => {
-      if (!filename) return '';
-      const base = filename.replace(/\.[^.]+$/, '');
-      const spaced = base.replace(/[-_]+/g, ' ').trim();
-      return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : '';
-    };
-
-    const defaultName = deriveDefaultName();
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      const withoutComment = trimmed.replace(/^\/\/\s*/, '');
-
-      if (withoutComment === '---') {
-        if (!inMetadata) {
-          inMetadata = true;
-        } else {
-          inMetadata = false;
-        }
-        continue;
-      }
-
-      if (inMetadata) {
-        const match = withoutComment.match(/^([\w-]+):\s*(.+)$/);
-        if (match) {
-          metadata[match[1]] = match[2].trim();
-        }
-        continue;
-      }
-
-      if (line.startsWith('// %% ')) {
-        if (currentCell) {
-          if (currentCell.type === 'markdown') {
-            currentCell.content = markdownContent.trim();
-          } else if (currentCell.type === 'code') {
-            currentCell.content = codeContent.trim();
-          }
-          cells.push(currentCell);
-        }
-
-        const typeMatch = line.match(/\/\/ %% \[(\w+)\]/);
-        if (typeMatch) {
-          const type = typeMatch[1];
-          currentCell = {
-            id: `cell-${cells.length + 1}`,
-            type: type === 'javascript' ? 'code' : type,
-            content: '',
-            output: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-          };
-          inMarkdown = false;
-          markdownContent = '';
-          codeContent = '';
-        }
-        continue;
-      }
-
-      if (currentCell) {
-        if (currentCell.type === 'markdown') {
-          if (line.startsWith('/*')) {
-            inMarkdown = true;
-          } else if (line.startsWith('*/')) {
-            inMarkdown = false;
-          } else if (inMarkdown) {
-            markdownContent += line + '\n';
-          }
-        } else if (currentCell.type === 'code') {
-          codeContent += line + '\n';
-        }
-      }
-    }
-
-    if (currentCell) {
-      if (currentCell.type === 'markdown') {
-        currentCell.content = markdownContent.trim();
-      } else if (currentCell.type === 'code') {
-        currentCell.content = codeContent.trim();
-      }
-      cells.push(currentCell);
-    }
-
-    const notebookName =
-      (metadata.title && metadata.title.length > 0 ? metadata.title : defaultName) ||
-      'Sample Notebook';
-    const notebookId =
-      (metadata.id && metadata.id.length > 0 ? metadata.id : slugify(notebookName)) ||
-      `notebook-${Date.now()}`;
-
-    return {
-      id: notebookId,
-      name: notebookName,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      cells,
-    };
-  }
-
   onMount(() => {
-    // Try to load a sample notebook bundled with the frontend
-    (async () => {
-      try {
-        const res = await fetch('/sample-notebooks/climate-ecology-data-template.js');
-        if (res.ok) {
-          const text = await res.text();
-          const sample = parseJSNotebook(text, 'climate-ecology-data-template.js');
-          currentNotebook.set(sample);
-          markNotebookClean();
-        } else {
-          const newNotebook = createNewNotebook();
-          currentNotebook.set(newNotebook);
-          markNotebookClean();
-        }
-      } catch (e) {
+    // Check for saved notebook in localStorage first
+    const meta = getLocalStorageMeta();
+    const saved = loadFromLocalStorage();
+
+    if (saved && meta) {
+      // Restore from localStorage
+      currentNotebook.set(saved);
+      markNotebookClean();
+      console.info('Notebook restored from previous session');
+    } else {
+      // Load sample notebook
+      loadSampleNotebook();
+    }
+
+    loadNotebookFiles();
+
+    // Auto-save to localStorage on every change
+    const unsubscribe = currentNotebook.subscribe(notebook => {
+      if (notebook) {
+        saveToLocalStorage(notebook);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  });
+
+  async function loadSampleNotebook() {
+    try {
+      const res = await fetch('/sample-notebooks/climate-ecology-data-template.js');
+      if (res.ok) {
+        const text = await res.text();
+        const sample = parseJSNotebook(text, 'climate-ecology-data-template.js');
+        currentNotebook.set(sample);
+        markNotebookClean();
+      } else {
         const newNotebook = createNewNotebook();
         currentNotebook.set(newNotebook);
         markNotebookClean();
       }
-
-      // Load saved notebooks list (mock/backend)
-      loadNotebookFiles();
-    })();
-
-    // Autosave is disabled in web version to prevent unwanted downloads
-    // It will only work in Tauri desktop app with proper file system integration
-    // For now, users should manually save with Ctrl+S
-  });
+    } catch (e) {
+      const newNotebook = createNewNotebook();
+      currentNotebook.set(newNotebook);
+      markNotebookClean();
+    }
+  }
 
   async function loadNotebookFiles() {
-    // TODO: Implement loading notebook files from Go backend
-    // For now, we'll use mock data
     notebookFiles.set([]);
   }
 
-function handleNewNotebook() {
-  const newNotebook = createNewNotebook();
-  currentNotebook.set(newNotebook);
-  markNotebookClean();
-  console.info('New notebook created');
-}
+  function handleNewNotebook() {
+    const newNotebook = createNewNotebook();
+    resetExecutionCounter();
+    currentNotebook.set(newNotebook);
+    markNotebookClean();
+    console.info('New notebook created');
+  }
 
   function handleImportNotebook() {
-    // Create a file input element
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,.js';
-    input.onchange = async (e: Event) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-
-      try {
-        const text = await file.text();
-        let notebook;
-
-        if (file.name.toLowerCase().endsWith('.js')) {
-          notebook = parseJSNotebook(text, file.name);
-        } else {
-          notebook = JSON.parse(text);
-        }
-
-        // Validate that it's a valid notebook
-        if (!notebook.id || !notebook.cells || !Array.isArray(notebook.cells)) {
-          alert('Invalid notebook file format');
-          return;
-        }
-
-        currentNotebook.set(notebook);
-        markNotebookClean();
-        console.info('Notebook imported successfully');
-      } catch (err) {
-        console.error('Import failed:', err);
-        alert('Failed to import notebook: ' + err.message);
-      }
-    };
-    input.click();
+    importNotebookFromFile((notebook) => {
+      resetExecutionCounter();
+      currentNotebook.set(notebook);
+      markNotebookClean();
+      console.info('Notebook imported successfully');
+    });
   }
 
   function handleExportNotebook() {
@@ -232,56 +112,22 @@ function handleNewNotebook() {
     rightSidebarOpen = !rightSidebarOpen;
   }
 
-  function handleGlobalKeydown(event: KeyboardEvent) {
-    // Command Palette: Ctrl/Cmd + K
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-      event.preventDefault();
-      showCommandPalette = !showCommandPalette;
-      return;
-    }
-
-    // Toggle Chat: Ctrl/Cmd + /
-    if ((event.metaKey || event.ctrlKey) && event.key === '/') {
-      event.preventDefault();
-      chatSidebarOpen = !chatSidebarOpen;
-      return;
-    }
-
-    // Save: Ctrl/Cmd + S
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault();
-      performSaveShortcut();
-      return;
-    }
-
-    // New Notebook: Ctrl/Cmd + N
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
-      event.preventDefault();
-      handleNewNotebook();
-      return;
-    }
-
-    // Open Notebook: Ctrl/Cmd + O
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
-      event.preventDefault();
-      handleImportNotebook();
-      return;
-    }
+  function onKeydown(event: KeyboardEvent) {
+    handleGlobalKeydown(event, {
+      showCommandPalette: () => { showCommandPalette = !showCommandPalette; },
+      toggleChat: () => { chatSidebarOpen = !chatSidebarOpen; },
+      save: () => performSaveShortcut(),
+      newNotebook: () => handleNewNotebook(),
+      importNotebook: () => handleImportNotebook(),
+      undo: () => handleUndo(),
+    });
   }
 
   async function performSaveShortcut() {
     const notebook = get(currentNotebook);
     if (!notebook) return;
-    const baseName = slugify(notebook.name || 'notebook');
     try {
-      const content = await exportService.exportNotebook(notebook, {
-        includeCode: true,
-        includeOutputs: true,
-        includeTimestamps: false,
-        theme: 'light',
-        format: 'js'
-      });
-      downloadText(content as string, `${baseName}.js`, 'text/javascript');
+      await saveNotebook(notebook);
       markNotebookClean();
       console.info('Notebook checkpoint exported as .js');
     } catch (err) {
@@ -290,22 +136,11 @@ function handleNewNotebook() {
     }
   }
 
-  function slugify(value: string): string {
-    return value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .trim() || 'notebook';
-  }
-
-  function downloadText(text: string, filename: string, mime: string) {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
+  function handleUndo() {
+    currentNotebook.update(notebook => {
+      if (!notebook) return notebook;
+      return undoDeleteCell(notebook);
+    });
   }
 
   function handleCommand(event: CustomEvent) {
@@ -348,7 +183,8 @@ function handleNewNotebook() {
           'Ctrl/Cmd+O - Open Notebook\n' +
           'Ctrl/Cmd+Enter - Run Cell\n' +
           'Shift+Enter - Run Cell and Select Next\n' +
-          'Alt+Enter - Run Cell and Insert Below');
+          'Alt+Enter - Run Cell and Insert Below\n' +
+          'Ctrl/Cmd+Z - Undo Cell Delete');
         break;
     }
   }
@@ -357,7 +193,6 @@ function handleNewNotebook() {
     const notebook = get(currentNotebook);
     if (!notebook) return;
 
-    // Get the selected cell ID or fall back to last cell
     const currentSelectedId = get(selectedCellId);
     const targetCell = currentSelectedId
       ? notebook.cells.find(c => c.id === currentSelectedId)
@@ -370,7 +205,6 @@ function handleNewNotebook() {
       if (!nb) return nb;
       const updatedNotebook = addCellAfter(nb, targetCellId, type);
 
-      // Find and select the newly added cell
       const newCell = updatedNotebook.cells.find(cell =>
         !nb.cells.some(oldCell => oldCell.id === cell.id)
       );
@@ -383,13 +217,15 @@ function handleNewNotebook() {
   }
 
   function clearAllOutputs() {
+    resetExecutionCounter();
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return {
         ...notebook,
         cells: notebook.cells.map(cell => ({
           ...cell,
-          output: undefined
+          output: undefined,
+          executionOrder: undefined
         })),
         updatedAt: Date.now()
       };
@@ -408,7 +244,6 @@ function handleNewNotebook() {
     const lastCell = notebook.cells[notebook.cells.length - 1];
     const updatedNotebook = addCellAfter(notebook, lastCell.id, 'code');
 
-    // Update the new cell's content
     updatedNotebook.cells[updatedNotebook.cells.length - 1].content = code;
 
     currentNotebook.set(updatedNotebook);
@@ -416,7 +251,7 @@ function handleNewNotebook() {
   }
 </script>
 
-<svelte:window on:keydown={handleGlobalKeydown} />
+<svelte:window on:keydown={onKeydown} />
 
 <div class="app-container">
   <!-- Observable-style header -->

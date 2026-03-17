@@ -8,10 +8,13 @@
 
   export let cell: NotebookCell;
   export let isSelected: boolean = false;
+  export let isDraggedOver: boolean = false;
+  export let dragPosition: 'above' | 'below' | null = null;
 
   const dispatch = createEventDispatcher();
 
   let editorRef: MonacoEditor;
+  let isDragging = false;
 
   function handleContentChange(event: CustomEvent) {
     dispatch('contentChange', {
@@ -31,7 +34,6 @@
     if (cell.type === 'markdown') {
       isEditingMarkdown = false;
     }
-    // Forward the event to Notebook component
     dispatch('runAndAdvance', { cellId: cell.id });
   }
 
@@ -85,13 +87,50 @@
     dispatch('select', { cellId: cell.id });
   }
 
+  function handleToggleCollapse() {
+    dispatch('toggleCollapse', { cellId: cell.id });
+  }
+
+  function handleToggleOutputCollapse() {
+    dispatch('toggleOutputCollapse', { cellId: cell.id });
+  }
+
+  // Drag-and-drop handlers
+  function onDragStart(event: DragEvent) {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', cell.id);
+    isDragging = true;
+    dispatch('dragstart', { cellId: cell.id });
+  }
+
+  function onDragOver(event: DragEvent) {
+    event.preventDefault();
+    if (!event.dataTransfer) return;
+    event.dataTransfer.dropEffect = 'move';
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const position = event.clientY < midY ? 'above' : 'below';
+    dispatch('dragover', { cellId: cell.id, position });
+  }
+
+  function onDragEnd() {
+    isDragging = false;
+    dispatch('dragend');
+  }
+
+  function onDrop(event: DragEvent) {
+    event.preventDefault();
+    dispatch('dragend');
+  }
+
   // Rendered HTML for markdown preview
   let renderedMarkdown = '';
   let markdownPreview: any = null;
   let isEditingMarkdown = true;
   let markdownTextarea: HTMLTextAreaElement;
 
-  // Auto-resize textarea to fit content
   function autoResizeTextarea(textarea: HTMLTextAreaElement) {
     if (textarea) {
       textarea.style.height = 'auto';
@@ -142,7 +181,6 @@
       try {
         let md = cell.content || '';
 
-        // Basic katex support: render $$...$$ blocks
         md = md.replace(/\$\$([\s\S]*?)\$\$/g, (m, expr) => {
           try {
             return katex.renderToString(expr, { throwOnError: false, displayMode: true });
@@ -151,7 +189,6 @@
           }
         });
 
-        // Call marked - it's the default export
         renderedMarkdown = marked(md) || '';
       } catch (e) {
         renderedMarkdown = `<pre style="color: #dc2626;">Markdown render error: ${e && e.message ? e.message : String(e)}</pre>`;
@@ -160,11 +197,18 @@
       renderedMarkdown = '';
     }
   }
+
+  // Execution order label
+  $: execLabel = cell.executionOrder ? `[${cell.executionOrder}]` : '[ ]';
 </script>
 
 <div
-  class="cell-wrapper {isSelected ? 'selected' : ''}"
+  class="cell-wrapper {isSelected ? 'selected' : ''} {isDragging ? 'dragging' : ''}"
+  class:drag-above={isDraggedOver && dragPosition === 'above'}
+  class:drag-below={isDraggedOver && dragPosition === 'below'}
   data-testid="cell-{cell.id}"
+  on:dragover={onDragOver}
+  on:drop={onDrop}
 >
   <!-- Left indicator bar (Observable style) -->
   <div class="cell-indicator {isSelected ? 'active' : ''}"></div>
@@ -177,9 +221,24 @@
     tabindex="0"
     on:keydown={(e) => e.key === 'Enter' && handleCellClick()}
   >
-    <!-- Cell toolbar - always visible -->
+    <!-- Cell toolbar -->
     <div class="cell-toolbar" data-testid="cell-toolbar">
         <div class="toolbar-left">
+          <!-- Drag handle -->
+          <span
+            class="drag-handle"
+            draggable="true"
+            on:dragstart={onDragStart}
+            on:dragend={onDragEnd}
+            title="Drag to reorder"
+          >
+            <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
+              <circle cx="3" cy="3" r="1.5"/><circle cx="9" cy="3" r="1.5"/>
+              <circle cx="3" cy="7" r="1.5"/><circle cx="9" cy="7" r="1.5"/>
+              <circle cx="3" cy="11" r="1.5"/><circle cx="9" cy="11" r="1.5"/>
+            </svg>
+          </span>
+
           <button
             on:click|stopPropagation={handleRun}
             class="toolbar-btn run-btn"
@@ -196,6 +255,10 @@
             {/if}
           </button>
 
+          {#if cell.type === 'code'}
+            <span class="exec-order" title="Execution order">{execLabel}</span>
+          {/if}
+
           <select
             value={cell.type}
             on:change={(e) => handleCellTypeChange(e.target.value)}
@@ -208,6 +271,37 @@
         </div>
 
         <div class="toolbar-right">
+          <!-- Collapse toggle -->
+          <button
+            on:click|stopPropagation={handleToggleCollapse}
+            class="toolbar-btn"
+            title={cell.collapsed ? 'Expand cell' : 'Collapse cell'}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+              {#if cell.collapsed}
+                <path d="M4 6l3 3 3-3"/>
+              {:else}
+                <path d="M4 8l3-3 3 3"/>
+              {/if}
+            </svg>
+          </button>
+
+          {#if cell.output}
+            <button
+              on:click|stopPropagation={handleToggleOutputCollapse}
+              class="toolbar-btn"
+              title={cell.outputCollapsed ? 'Show output' : 'Hide output'}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                {#if cell.outputCollapsed}
+                  <path d="M2 7h10M7 2v10"/>
+                {:else}
+                  <path d="M2 7h10"/>
+                {/if}
+              </svg>
+            </button>
+          {/if}
+
           <button
             on:click|stopPropagation={handleMoveUp}
             class="toolbar-btn"
@@ -244,7 +338,7 @@
           <button
             on:click|stopPropagation={handleDeleteCell}
             class="toolbar-btn delete-btn"
-            title="Delete cell"
+            title="Delete cell (Ctrl+Z to undo)"
             data-testid="delete-cell-btn"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -254,52 +348,65 @@
         </div>
       </div>
 
-    <!-- Cell content -->
-    <div class="cell-content">
-      {#if cell.type === 'code'}
-        <MonacoEditor
-          bind:this={editorRef}
-          value={cell.content}
-          language="javascript"
-          height="auto"
-          on:change={handleContentChange}
-          on:run={handleRun}
-          on:runAndAdvance={handleRunAndAdvance}
-          on:editorFocus={handleEditorFocus}
-          on:focus={handleEditorFocus}
-        />
-      {:else}
-        <div class="markdown-wrapper">
-          {#if isEditingMarkdown}
-            <textarea
-              bind:this={markdownTextarea}
-              value={cell.content}
-              on:input={handleMarkdownInput}
-              on:focus={handleEditorFocus}
-              class="markdown-editor"
-              placeholder="Enter markdown..."
-              data-testid="markdown-editor"
-            ></textarea>
-          {:else}
-            <div
-              class="markdown-preview rendered"
-              bind:this={markdownPreview}
-              on:click|stopPropagation={handleEditMarkdown}
-              on:keydown|stopPropagation={(e) => e.key === 'Enter' && handleEditMarkdown()}
-              tabindex="0"
-              role="button"
-              data-testid="markdown-preview"
-            >
-              {@html renderedMarkdown}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
+    <!-- Cell content (collapsible) -->
+    {#if !cell.collapsed}
+      <div class="cell-content">
+        {#if cell.type === 'code'}
+          <MonacoEditor
+            bind:this={editorRef}
+            value={cell.content}
+            language="javascript"
+            height="auto"
+            on:change={handleContentChange}
+            on:run={handleRun}
+            on:runAndAdvance={handleRunAndAdvance}
+            on:editorFocus={handleEditorFocus}
+            on:focus={handleEditorFocus}
+          />
+        {:else}
+          <div class="markdown-wrapper">
+            {#if isEditingMarkdown}
+              <textarea
+                bind:this={markdownTextarea}
+                value={cell.content}
+                on:input={handleMarkdownInput}
+                on:focus={handleEditorFocus}
+                class="markdown-editor"
+                placeholder="Enter markdown..."
+                data-testid="markdown-editor"
+              ></textarea>
+            {:else}
+              <div
+                class="markdown-preview rendered"
+                bind:this={markdownPreview}
+                on:click|stopPropagation={handleEditMarkdown}
+                on:keydown|stopPropagation={(e) => e.key === 'Enter' && handleEditMarkdown()}
+                tabindex="0"
+                role="button"
+                data-testid="markdown-preview"
+              >
+                {@html renderedMarkdown}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <div class="collapsed-indicator">
+        <span class="collapsed-text">
+          {cell.type === 'code' ? cell.content.split('\n')[0]?.substring(0, 80) || 'Empty cell' : 'Markdown cell'}
+          {#if cell.content.split('\n').length > 1}...{/if}
+        </span>
+      </div>
+    {/if}
 
-    <!-- Cell output -->
-    {#if cell.output}
+    <!-- Cell output (collapsible) -->
+    {#if cell.output && !cell.outputCollapsed}
       <CellOutput output={cell.output} />
+    {:else if cell.output && cell.outputCollapsed}
+      <div class="collapsed-output-indicator">
+        <span>Output hidden ({cell.output.type})</span>
+      </div>
     {/if}
   </div>
 </div>
@@ -310,6 +417,20 @@
     margin-bottom: 1.1rem;
     padding-left: 0.375rem;
     transition: all 0.2s ease;
+  }
+
+  .cell-wrapper.dragging {
+    opacity: 0.5;
+  }
+
+  .cell-wrapper.drag-above {
+    border-top: 3px solid #3b82f6;
+    padding-top: 0;
+  }
+
+  .cell-wrapper.drag-below {
+    border-bottom: 3px solid #3b82f6;
+    padding-bottom: 0;
   }
 
   .cell-indicator {
@@ -362,6 +483,33 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
+  }
+
+  .drag-handle {
+    display: flex;
+    align-items: center;
+    cursor: grab;
+    color: #c0c0c0;
+    padding: 0.2rem;
+    border-radius: 3px;
+    transition: color 0.15s ease;
+  }
+
+  .drag-handle:hover {
+    color: #6b6b6b;
+    background-color: #f0f0f0;
+  }
+
+  .drag-handle:active {
+    cursor: grabbing;
+  }
+
+  .exec-order {
+    font-family: 'Fira Code', monospace;
+    font-size: 0.7rem;
+    color: #9ca3af;
+    min-width: 2rem;
+    text-align: center;
   }
 
   .toolbar-btn {
@@ -423,10 +571,39 @@
     border-color: #1a1a1a;
   }
 
-.cell-content {
-  padding: 0.3rem 0.65rem 0.4rem;
-  min-height: 0;
-}
+  .cell-content {
+    padding: 0.3rem 0.65rem 0.4rem;
+    min-height: 0;
+  }
+
+  .collapsed-indicator {
+    padding: 0.4rem 0.65rem;
+    cursor: pointer;
+  }
+
+  .collapsed-text {
+    font-family: 'Fira Code', monospace;
+    font-size: 0.8rem;
+    color: #9ca3af;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+  }
+
+  .collapsed-output-indicator {
+    padding: 0.3rem 0.65rem;
+    font-size: 0.75rem;
+    color: #9ca3af;
+    cursor: pointer;
+    border-top: 1px solid #ededed;
+  }
+
+  .collapsed-output-indicator:hover {
+    color: #6b6b6b;
+    background-color: #f9f9f9;
+  }
 
   .markdown-editor {
     width: 100%;

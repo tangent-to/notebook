@@ -4,24 +4,24 @@
  * JavaScript executor used by Tangent Notebook frontend.
  *
  * Responsibilities:
- * - Execute non-module JS code in a global-like context so top-level declarations
- *   can persist between notebook cells.
- * - Route code that contains top-level `import`/`export` to module execution to
- *   avoid syntax errors (import declarations only valid at module top-level),
- *   while allowing top-level await within regular cells.
+ * - Execute non-module JS code using an explicit shared scope object
+ *   so notebook-level variables persist between cells predictably.
+ * - Route code that contains top-level `import`/`export` to module execution.
  * - Capture console output and collect DOM outputs appended to a temporary output div.
  * - Preserve last-expression display without mutating the global scope unless the
  *   executed code does so explicitly.
- * - Avoid printing huge structures when the last line is an assignment to `window`/`globalThis`.
- *
- * Note: This file intentionally uses pragmatic, regex-based heuristics for the notebook use-case.
- * For full correctness and edge-case handling, consider a proper JS parser/AST transformations.
+ * - Intercept dynamic <script> injection from cell code and temporarily disable
+ *   Monaco's RequireJS/AMD `define` so third-party UMD/WASM scripts (e.g. Verovio)
+ *   don't collide with the AMD loader.
  */
 
 import type { CellOutput } from "../types/notebook";
 
 export class JavaScriptExecutor {
   private outputElement: HTMLElement | null = null;
+
+  /** Explicit shared scope for notebook variables across cells */
+  private scope: Record<string, any> = {};
 
   constructor() {
     this.setupExecutionEnvironment();
@@ -30,6 +30,97 @@ export class JavaScriptExecutor {
   private setupExecutionEnvironment() {
     (window as any).__tangent_loadedModules =
       (window as any).__tangent_loadedModules || {};
+    // Expose shared scope on window so cells can access it
+    (window as any).__tangent_scope = this.scope;
+    // Install the AMD guard so dynamically injected scripts don't conflict
+    // with Monaco Editor's RequireJS loader.
+    this.installAmdGuard();
+  }
+
+  /**
+   * Monkey-patch document.createElement to intercept <script> element creation.
+   * When a notebook cell (or a library it loads) injects a <script> tag,
+   * we temporarily hide `window.define` so that UMD/AMD scripts see no AMD
+   * loader and fall through to their global/IIFE path instead of colliding
+   * with Monaco's RequireJS.
+   *
+   * `define` is restored once the script's `load` or `error` event fires.
+   * Idempotent — safe to call multiple times.
+   */
+  private installAmdGuard() {
+    if ((window as any).__tangent_amdGuardInstalled) return;
+    (window as any).__tangent_amdGuardInstalled = true;
+
+    const origCreateElement = document.createElement.bind(document);
+    const srcDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLScriptElement.prototype,
+      "src",
+    );
+
+    document.createElement = function (
+      tagName: string,
+      options?: ElementCreationOptions,
+    ): HTMLElement {
+      const el = origCreateElement(tagName, options);
+
+      // Only patch <script> elements, and only if we can intercept src
+      if (tagName.toLowerCase() !== "script" || !srcDescriptor?.set) {
+        return el;
+      }
+
+      const origSrcSet = srcDescriptor.set;
+      const origSrcGet = srcDescriptor.get;
+
+      // Override `src` on this specific element instance.
+      // When src is assigned, hide AMD `define` until load/error fires.
+      Object.defineProperty(el, "src", {
+        set(value: string) {
+          const savedDefine = (window as any).define;
+          if (savedDefine && savedDefine.amd) {
+            (window as any).define = undefined;
+
+            const restore = () => {
+              // Only restore if nothing else has set define in the meantime
+              if (!(window as any).define) {
+                (window as any).define = savedDefine;
+              }
+            };
+            el.addEventListener("load", restore, { once: true });
+            el.addEventListener("error", restore, { once: true });
+            // Safety net: restore after 30s even if no event fires
+            setTimeout(restore, 30000);
+          }
+
+          origSrcSet.call(el, value);
+        },
+        get() {
+          return origSrcGet?.call(el) ?? "";
+        },
+        configurable: true,
+        enumerable: true,
+      });
+
+      return el;
+    } as typeof document.createElement;
+  }
+
+  /** Reset the shared scope (equivalent to "restart kernel") */
+  resetScope() {
+    for (const key of Object.keys(this.scope)) {
+      delete this.scope[key];
+    }
+    (window as any).__tangent_scope = this.scope;
+  }
+
+  /** Get current variable names and values from shared scope */
+  getVariables(): Record<string, any> {
+    const vars: Record<string, any> = {};
+    for (const [key, value] of Object.entries(this.scope)) {
+      // Skip internal variables
+      if (key.startsWith('__tangent_')) continue;
+      vars[key] = value;
+    }
+    return vars;
   }
 
   /**
@@ -39,7 +130,6 @@ export class JavaScriptExecutor {
    */
   async executeCode(code: string): Promise<CellOutput> {
     // If code contains top-level import/export, route to module execution.
-    // This prevents "import declarations may only appear at top level of a module".
     if (/^\s*(import|export)\s+/m.test(code)) {
       return this.executeModule(code);
     }
@@ -124,14 +214,12 @@ export class JavaScriptExecutor {
         // Detect if last line is a simple expression we should display
         const rawLastLine = lines[lines.length - 1]?.trim() ?? "";
         const lastNoSemi = rawLastLine.replace(/;+$/, "");
-        // treat as expression if it doesn't start with a statement keyword and isn't an assignment
         const isLikelyExpression = lastNoSemi &&
           !/^(const|let|var|function|class|if|for|while|switch|return)\b/.test(
             lastNoSemi,
           ) &&
           !lastNoSemi.endsWith("{") &&
           !lastNoSemi.endsWith("}") &&
-          // avoid plain assignments (a = b, obj.prop = ...)
           !/^[\s\S]*=[^=][\s\S]*$/.test(lastNoSemi);
 
         let execBody = code;
@@ -146,21 +234,27 @@ export class JavaScriptExecutor {
               : `window.__tangent_last = (${expression});`;
           }
         } else {
-          // Not an expression — run the original code as-is.
-          // This covers declarations, assignments, etc.
           execBody = code;
         }
 
         // Execute in global scope using indirect eval so top-level await remains supported.
+        // Capture the IIFE's resolved value so that `return <expr>` in a cell displays output.
         const globalEval = (0, eval) as (s: string) => any;
         const wrapped = `(async () => {\n${execBody}\n})()`;
-        const result = globalEval(wrapped);
-        if (result && typeof result.then === "function") {
-          await result;
+        const iifeResult = globalEval(wrapped);
+        let returnedValue: any = undefined;
+        if (iifeResult && typeof iifeResult.then === "function") {
+          returnedValue = await iifeResult;
         }
 
-        // After execution, prefer DOM outputs that libraries appended to the outputDiv
-        const lastVal = (window as any).__tangent_last;
+        // Sync scope: capture top-level const/let/var declarations
+        this.syncScopeFromGlobals(code);
+
+        // After execution, prefer DOM outputs that libraries appended to the outputDiv.
+        // Use __tangent_last (set by last-expression capture) or the IIFE's return value.
+        const lastVal = (window as any).__tangent_last !== undefined
+          ? (window as any).__tangent_last
+          : returnedValue;
         try {
           delete (window as any).__tangent_last;
         } catch {
@@ -168,7 +262,6 @@ export class JavaScriptExecutor {
         }
 
         if (lastVal instanceof Node) {
-          // Return the DOM node directly so the renderer can insert it live.
           return {
             type: "dom",
             content: lastVal as Element,
@@ -186,8 +279,6 @@ export class JavaScriptExecutor {
         }
 
         if (outputDiv.children.length > 0) {
-          // a library attached visualization - detach children and return as a live DOM node.
-          // If there is a single root element, return it; otherwise wrap children in a container div.
           let domNode: Element;
           if (outputDiv.children.length === 1) {
             domNode = outputDiv.children[0] as Element;
@@ -205,7 +296,6 @@ export class JavaScriptExecutor {
           };
         }
 
-        // If we captured a last expression value, show it (formatted)
         if (lastVal !== undefined) {
           return {
             type: hasError ? "error" : "text",
@@ -216,19 +306,16 @@ export class JavaScriptExecutor {
           };
         }
 
-        // Otherwise, show captured console output (if any)
         return {
           type: hasError ? "error" : "text",
           content: capturedOutput.join("\n"),
           timestamp: Date.now(),
         };
       } finally {
-        // restore console
         console.log = originalLog;
         console.error = originalError;
         console.warn = originalWarn;
 
-        // cleanup temporary outputDiv
         try {
           const cur = (window as any).__tangent_currentOutputDiv;
           if (cur && cur.parentNode) cur.parentNode.removeChild(cur);
@@ -250,19 +337,28 @@ export class JavaScriptExecutor {
   }
 
   /**
+   * Try to sync simple top-level variable declarations from code into the scope.
+   * This is a best-effort heuristic so notebook variables are trackable.
+   */
+  private syncScopeFromGlobals(code: string): void {
+    const declRegex = /(?:^|\n)\s*(?:const|let|var)\s+([\w$]+)\s*=/g;
+    let match: RegExpExecArray | null;
+    while ((match = declRegex.exec(code)) !== null) {
+      const name = match[1];
+      if (name in window) {
+        this.scope[name] = (window as any)[name];
+      }
+    }
+  }
+
+  /**
    * Execute code as an ES module. Supports static imports and top-level await.
-   * Strategy:
-   * - Parse import statements (simple regex) and dynamic-import those modules via CDN if needed.
-   * - Remove import lines and execute the remaining code inside an async IIFE via indirect eval,
-   *   leaving scope management to the executed code.
-   * - Capture a final expression similarly to executeCode by writing into window.__tangent_last.
    */
   async executeModule(code: string): Promise<CellOutput> {
     try {
       (window as any).__tangent_loadedModules =
         (window as any).__tangent_loadedModules || {};
 
-      // Find import statements (simple regex - supports common forms)
       const imports: Array<{ spec: string; locals: string[] }> = [];
       const importRegex =
         /import\s+(?:\*\s+as\s+([\w_$]+)|([\w_$]+)|\{([^}]+)\})\s+from\s+['"]([^'"]+)['"]/g;
@@ -288,7 +384,6 @@ export class JavaScriptExecutor {
         if (locals.length > 0) imports.push({ spec, locals });
       }
 
-      // Load modules and expose to window under reasonable names
       for (const imp of imports) {
         const url = this.normalizeModuleUrl(imp.spec);
         const mod = await import(
@@ -296,11 +391,11 @@ export class JavaScriptExecutor {
         );
         for (const local of imp.locals) {
           (window as any)[local] = mod.default || mod;
+          this.scope[local] = mod.default || mod;
         }
         (window as any).__tangent_loadedModules[imp.spec] = mod;
       }
 
-      // Remove import lines from code and trim
       const codeWithoutImports = code
         .split("\n")
         .filter((line) => !line.trim().startsWith("import "))
@@ -318,7 +413,6 @@ export class JavaScriptExecutor {
         };
       }
 
-      // Determine if last line is an expression we should capture
       const lines = codeWithoutImports.split("\n");
       const rawLast = lines[lines.length - 1]?.trim() ?? "";
       const lastNoSemi = rawLast.replace(/;+$/, "");
@@ -347,13 +441,17 @@ export class JavaScriptExecutor {
         funcBody = codeWithoutImports;
       }
 
-      // Execute the code inside an async IIFE in global scope to support top-level await
       const asyncIIFE = `(async () => {\n${funcBody}\n})()`;
       const globalEval = (0, eval) as (s: string) => any;
-      await globalEval(asyncIIFE);
+      const returnedValue = await globalEval(asyncIIFE);
 
-      // Return last captured value if present
-      const last = (window as any).__tangent_last;
+      // Sync scope
+      this.syncScopeFromGlobals(codeWithoutImports);
+
+      // Use __tangent_last (last-expression capture) or the IIFE's return value
+      const last = (window as any).__tangent_last !== undefined
+        ? (window as any).__tangent_last
+        : returnedValue;
       try {
         delete (window as any).__tangent_last;
       } catch {}
@@ -438,7 +536,6 @@ export class JavaScriptExecutor {
       }
 
       if (ch === "`") {
-        // template literals add significant parsing complexity; bail out gracefully
         return null;
       }
 
@@ -466,7 +563,6 @@ export class JavaScriptExecutor {
     return { before: "", expression };
   }
 
-  // Small helper to format values for display. Avoids dumping extremely large arrays fully.
   private formatValue(value: any): string {
     if (value === null) return "null";
     if (value === undefined) return "undefined";
@@ -490,7 +586,6 @@ export class JavaScriptExecutor {
     return String(value);
   }
 
-  // Load ESM module via dynamic import and return it
   async loadModule(moduleUrl: string): Promise<any> {
     try {
       const normalized = this.normalizeModuleUrl(moduleUrl);
@@ -506,7 +601,6 @@ export class JavaScriptExecutor {
 
   private normalizeModuleUrl(moduleUrl: string): string {
     if (/^https?:\/\//.test(moduleUrl)) return moduleUrl;
-    // default to jsdelivr +esm entry
     return `https://cdn.jsdelivr.net/npm/${moduleUrl}/+esm`;
   }
 
@@ -555,7 +649,6 @@ export class JavaScriptExecutor {
 
     if (keys.length === 0 || keys.length > 100) return null;
 
-    // Ensure each row is an object keyed by column name
     rows = rows.map((row) => {
       if (row && typeof row === "object" && !Array.isArray(row)) {
         return row;
@@ -598,17 +691,9 @@ export class JavaScriptExecutor {
 
   /**
    * setupCommonLibraries
-   *
-   * Compatibility shim called by the UI at startup. Kept intentionally lightweight:
-   * - No-op by default so existing behaviour doesn't change.
-   * - Provides a single place to eagerly load or expose commonly used libraries in future.
+   * Preloads d3 and Plot so cells can use them without imports.
    */
   async setupCommonLibraries(): Promise<void> {
-    // Preload common libraries used by sample notebooks so cells can rely on
-    // `window.d3` and `window.Plot` without each cell importing them.
-    // This uses the existing `loadModule` helper which normalizes module URLs
-    // to a CDN +esm entry, and exposes the modules' default export (or module)
-    // on the window object.
     try {
       if ((window as any).__tangent_commonLibsLoaded) return;
 
@@ -620,10 +705,12 @@ export class JavaScriptExecutor {
       (window as any).d3 = d3mod && (d3mod.default || d3mod);
       (window as any).Plot = plotmod && (plotmod.default || plotmod);
 
+      // Also track in scope
+      this.scope.d3 = (window as any).d3;
+      this.scope.Plot = (window as any).Plot;
+
       (window as any).__tangent_commonLibsLoaded = true;
     } catch (err) {
-      // Non-fatal: if loading fails, cells can still use dynamic import or fall back.
-      // Log a warning to aid debugging in the browser console.
       try {
         console.warn(
           "setupCommonLibraries: failed to preload common libs",
@@ -633,7 +720,6 @@ export class JavaScriptExecutor {
     }
   }
 
-  // Convenience: load modules first and then execute a code string in non-module path
   async executeCodeWithModules(
     code: string,
     modules: string[] = [],
@@ -644,6 +730,7 @@ export class JavaScriptExecutor {
           const mod = await this.loadModule(m);
           const name = this.getModuleName(m);
           (window as any)[name] = mod.default || mod;
+          this.scope[name] = mod.default || mod;
         }),
       );
       return await this.executeCode(code);

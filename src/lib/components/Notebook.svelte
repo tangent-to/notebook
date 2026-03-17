@@ -1,26 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Cell from './Cell.svelte';
-  import { currentNotebook, selectedCellId, markNotebookDirty } from '../stores/notebook';
-  import { 
-    updateCellContent, 
-    addCellAfter, 
-    deleteCell, 
-    moveCellUp, 
-    moveCellDown 
+  import { currentNotebook, selectedCellId, markNotebookDirty, getNextExecutionOrder, resetExecutionCounter } from '../stores/notebook';
+  import {
+    updateCellContent,
+    addCellAfter,
+    deleteCell,
+    moveCellUp,
+    moveCellDown
   } from '../stores/notebook';
   import { JavaScriptExecutor } from '../utils/jsExecutor';
   import type { Notebook, NotebookCell } from '../types/notebook';
-  
+
   let jsExecutor: JavaScriptExecutor;
   let isRunningAll = false;
-  
+
+  // Drag-and-drop state
+  let draggedCellId: string | null = null;
+  let dragOverCellId: string | null = null;
+  let dragOverPosition: 'above' | 'below' | null = null;
+
   onMount(async () => {
     jsExecutor = new JavaScriptExecutor();
-    // Load common libraries
     await jsExecutor.setupCommonLibraries();
 
-    // Listen for run-all event from header
     const handleRunAllEvent = () => handleRunAll();
     window.addEventListener('run-all-cells', handleRunAllEvent);
 
@@ -28,7 +31,7 @@
       window.removeEventListener('run-all-cells', handleRunAllEvent);
     };
   });
-  
+
   function handleContentChange(event: CustomEvent) {
     const { cellId, content } = event.detail;
     currentNotebook.update(notebook => {
@@ -36,25 +39,23 @@
       return updateCellContent(notebook, cellId, content);
     });
   }
-  
+
   async function handleRunCell(event: CustomEvent) {
     const { cellId } = event.detail;
 
-    // Get the current notebook state
     let notebook = null;
     const unsubscribe = currentNotebook.subscribe(n => notebook = n);
     unsubscribe();
 
     if (!notebook) return;
 
-    // Find the cell to execute
     const cell = notebook.cells.find(c => c.id === cellId);
     if (!cell) return;
 
-    // Markdown cells don't execute - they just render
-    if (cell.type === 'markdown') {
-      return;
-    }
+    if (cell.type === 'markdown') return;
+
+    // Get execution order number
+    const execOrder = getNextExecutionOrder();
 
     // Set cell as running
     currentNotebook.update(notebook => {
@@ -63,7 +64,7 @@
         ...notebook,
         cells: notebook.cells.map(cell =>
           cell.id === cellId
-            ? { ...cell, isRunning: true, output: undefined }
+            ? { ...cell, isRunning: true, output: undefined, executionOrder: execOrder }
             : cell
         )
       };
@@ -111,39 +112,34 @@
     }
   }
 
-  // Run all cells sequentially (including markdown)
   async function handleRunAll() {
     let notebook = null;
     const unsubscribe = currentNotebook.subscribe(n => notebook = n);
     unsubscribe();
-    
+
     if (!notebook || isRunningAll) return;
-    
+
     isRunningAll = true;
-    
-    // Run each cell in sequence
+    resetExecutionCounter();
+
     for (const cell of notebook.cells) {
       if (cell.type === 'code') {
         await handleRunCell({ detail: { cellId: cell.id } });
-        // Small delay between cells
         await new Promise(resolve => setTimeout(resolve, 100));
       } else if (cell.type === 'markdown') {
-        // For markdown cells, dispatch a render event
         const event = new CustomEvent('render-markdown', { detail: { cellId: cell.id } });
         window.dispatchEvent(event);
         await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
-    
+
     isRunningAll = false;
   }
 
-  // Run current cell and move focus to next cell if present
   async function handleRunAndAdvance(event: CustomEvent) {
     const { cellId } = event.detail;
     await handleRunCell(event);
 
-    // focus next
     let notebook = null;
     const unsub = currentNotebook.subscribe(n => notebook = n);
     unsub();
@@ -154,7 +150,7 @@
       selectedCellId.set(next.id);
     }
   }
-  
+
   function handleSelectCell(event: CustomEvent) {
     const { cellId } = event.detail;
     selectedCellId.set(cellId);
@@ -200,15 +196,12 @@
     }
   }
 
-
-  
   function handleAddCell(event: CustomEvent) {
     const { afterCellId } = event.detail;
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       const updatedNotebook = addCellAfter(notebook, afterCellId);
-      // Select the new cell
-      const newCell = updatedNotebook.cells.find(cell => 
+      const newCell = updatedNotebook.cells.find(cell =>
         !notebook.cells.some(oldCell => oldCell.id === cell.id)
       );
       if (newCell) {
@@ -217,18 +210,17 @@
       return updatedNotebook;
     });
   }
-  
+
   function handleDeleteCell(event: CustomEvent) {
     const { cellId } = event.detail;
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return deleteCell(notebook, cellId);
     });
-    
-    // Clear selection if deleted cell was selected
+
     selectedCellId.update(selected => selected === cellId ? null : selected);
   }
-  
+
   function handleMoveUp(event: CustomEvent) {
     const { cellId } = event.detail;
     currentNotebook.update(notebook => {
@@ -236,7 +228,7 @@
       return moveCellUp(notebook, cellId);
     });
   }
-  
+
   function handleMoveDown(event: CustomEvent) {
     const { cellId } = event.detail;
     currentNotebook.update(notebook => {
@@ -244,7 +236,7 @@
       return moveCellDown(notebook, cellId);
     });
   }
-  
+
   function handleCellTypeChange(event: CustomEvent) {
     const { cellId, type } = event.detail;
     markNotebookDirty();
@@ -252,8 +244,8 @@
       if (!notebook) return notebook;
       return {
         ...notebook,
-        cells: notebook.cells.map(cell => 
-          cell.id === cellId 
+        cells: notebook.cells.map(cell =>
+          cell.id === cellId
             ? { ...cell, type, output: undefined }
             : cell
         ),
@@ -261,7 +253,37 @@
       };
     });
   }
-  
+
+  function handleToggleCollapse(event: CustomEvent) {
+    const { cellId } = event.detail;
+    currentNotebook.update(notebook => {
+      if (!notebook) return notebook;
+      return {
+        ...notebook,
+        cells: notebook.cells.map(cell =>
+          cell.id === cellId
+            ? { ...cell, collapsed: !cell.collapsed }
+            : cell
+        )
+      };
+    });
+  }
+
+  function handleToggleOutputCollapse(event: CustomEvent) {
+    const { cellId } = event.detail;
+    currentNotebook.update(notebook => {
+      if (!notebook) return notebook;
+      return {
+        ...notebook,
+        cells: notebook.cells.map(cell =>
+          cell.id === cellId
+            ? { ...cell, outputCollapsed: !cell.outputCollapsed }
+            : cell
+        )
+      };
+    });
+  }
+
   async function runCellById(cellId: string): Promise<void> {
     const notebook = getNotebookSnapshot();
     if (!notebook) return;
@@ -276,19 +298,51 @@
     }
   }
 
+  // Drag-and-drop handlers
+  function handleDragStart(event: CustomEvent) {
+    draggedCellId = event.detail.cellId;
+  }
+
+  function handleDragOver(event: CustomEvent) {
+    const { cellId, position } = event.detail;
+    dragOverCellId = cellId;
+    dragOverPosition = position;
+  }
+
+  function handleDragEnd() {
+    if (draggedCellId && dragOverCellId && draggedCellId !== dragOverCellId) {
+      currentNotebook.update(notebook => {
+        if (!notebook) return notebook;
+        const cells = [...notebook.cells];
+        const fromIdx = cells.findIndex(c => c.id === draggedCellId);
+        const toIdx = cells.findIndex(c => c.id === dragOverCellId);
+        if (fromIdx === -1 || toIdx === -1) return notebook;
+
+        const [moved] = cells.splice(fromIdx, 1);
+        const insertIdx = dragOverPosition === 'above' ? toIdx : toIdx + 1;
+        const adjustedIdx = fromIdx < toIdx ? insertIdx - 1 : insertIdx;
+        cells.splice(Math.max(0, adjustedIdx), 0, moved);
+        markNotebookDirty();
+
+        return { ...notebook, cells, updatedAt: Date.now() };
+      });
+    }
+    draggedCellId = null;
+    dragOverCellId = null;
+    dragOverPosition = null;
+  }
+
   // Keyboard shortcuts
   async function handleKeydown(event: KeyboardEvent) {
     const activeCellId = $selectedCellId;
     if (!activeCellId) return;
 
-    // Run cell: Ctrl/Cmd+Enter
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       await runCellById(activeCellId);
       return;
     }
 
-    // Run cell + insert below: Alt/Option+Enter
     if (event.altKey && event.key === 'Enter') {
       event.preventDefault();
       await runCellById(activeCellId);
@@ -297,7 +351,6 @@
       return;
     }
 
-    // Run cell: Shift+Enter -> run and select next cell
     if (event.shiftKey && event.key === 'Enter') {
       event.preventDefault();
       await runCellById(activeCellId);
@@ -324,7 +377,6 @@
 
 <div class="notebook-container">
   {#if $currentNotebook}
-    <!-- Observable-style header without breadcrumb -->
     <div class="notebook-header">
       <h1
         class="notebook-title"
@@ -338,12 +390,14 @@
         {$currentNotebook.name}
       </h1>
     </div>
-    
+
     <div class="cells-container">
       {#each $currentNotebook.cells as cell (cell.id)}
-        <Cell 
+        <Cell
           {cell}
           isSelected={$selectedCellId === cell.id}
+          isDraggedOver={dragOverCellId === cell.id}
+          dragPosition={dragOverCellId === cell.id ? dragOverPosition : null}
           on:contentChange={handleContentChange}
           on:run={handleRunCell}
           on:runAndAdvance={handleRunAndAdvance}
@@ -353,12 +407,17 @@
           on:moveUp={handleMoveUp}
           on:moveDown={handleMoveDown}
           on:typeChange={handleCellTypeChange}
+          on:toggleCollapse={handleToggleCollapse}
+          on:toggleOutputCollapse={handleToggleOutputCollapse}
+          on:dragstart={handleDragStart}
+          on:dragover={handleDragOver}
+          on:dragend={handleDragEnd}
         />
       {/each}
     </div>
-    
+
     <div class="notebook-footer">
-      <button 
+      <button
         class="add-cell-btn"
         on:click={() => handleAddCell({ detail: { afterCellId: $currentNotebook.cells[$currentNotebook.cells.length - 1].id } })}
         data-testid="add-cell-btn"
@@ -383,11 +442,11 @@
     margin: 0 auto;
     padding: 1.5rem 1.5rem 2.5rem;
   }
-  
+
   .notebook-header {
     margin-bottom: 1.75rem;
   }
-  
+
   .notebook-title {
     font-size: 2.2rem;
     font-weight: 700;
@@ -397,7 +456,7 @@
     line-height: 1.15;
     letter-spacing: -0.01em;
   }
-  
+
   .notebook-title:focus {
     background-color: #fff5d6;
     padding: 0.125rem 0.35rem;
@@ -407,13 +466,13 @@
   .cells-container {
     margin-bottom: 1.5rem;
   }
-  
+
   .notebook-footer {
     display: flex;
     justify-content: center;
     padding-top: 1.5rem;
   }
-  
+
   .add-cell-btn {
     display: flex;
     align-items: center;
@@ -428,13 +487,13 @@
     cursor: pointer;
     transition: all 0.15s ease;
   }
-  
+
   .add-cell-btn:hover {
     background-color: #f4f4f4;
     border-color: #9c9c9c;
     color: #1a1a1a;
   }
-  
+
   .empty-state {
     display: flex;
     flex-direction: column;
@@ -443,14 +502,14 @@
     min-height: 400px;
     text-align: center;
   }
-  
+
   .empty-state h2 {
     font-size: 1.5rem;
     font-weight: 600;
     color: #1a1a1a;
     margin-bottom: 0.5rem;
   }
-  
+
   .empty-state p {
     color: #6b6b6b;
     font-size: 0.9375rem;
