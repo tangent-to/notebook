@@ -1,20 +1,43 @@
 <script lang="ts">
-  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import loader from '@monaco-editor/loader';
   import { aiService } from '../utils/aiService';
 
-  export let value: string = '';
-  export let language: string = 'javascript';
-  export let theme: string = 'vs';
-  export let height: string = '200px';
-  export let readOnly: boolean = false;
+  interface Props {
+    value?: string;
+    language?: string;
+    theme?: string;
+    height?: string;
+    readOnly?: boolean;
+    onchange?: (detail: { value: string }) => void;
+    onrun?: () => void;
+    onrunAndAdvance?: () => void;
+    oneditorFocus?: () => void;
+    onfocus?: () => void;
+    oneditorBlur?: () => void;
+    onblur?: () => void;
+  }
 
-  const dispatch = createEventDispatcher();
+  let {
+    value = '',
+    language = 'javascript',
+    theme = 'vs',
+    height = '200px',
+    readOnly = false,
+    onchange,
+    onrun,
+    onrunAndAdvance,
+    oneditorFocus,
+    onfocus,
+    oneditorBlur,
+    onblur,
+  }: Props = $props();
 
   let container: HTMLDivElement;
   let editor: any;
   let monacoLib: any;
-  let editorHeight = '32px';
+  let editorHeight = $state('32px');
+  let editorReady = $state(false);
   let focusDisposable: { dispose: () => void } | null = null;
   let blurDisposable: { dispose: () => void } | null = null;
   let removePointerListener: (() => void) | null = null;
@@ -25,7 +48,6 @@
   function getContentHeight(): number {
     try {
       if (!editor) return MIN_HEIGHT;
-      // Monaco's own measurement accounts for word-wrap, font size, etc.
       const h = typeof editor.getContentHeight === 'function'
         ? editor.getContentHeight()
         : undefined;
@@ -99,18 +121,42 @@
     };
   }
 
-  $: computedHeight = height === 'auto' ? editorHeight : height;
+  let computedHeight = $derived(height === 'auto' ? editorHeight : height);
+
+  // Sync editor value when prop changes from outside
+  $effect(() => {
+    if (!editorReady || !editor) return;
+    if (value !== editor.getValue()) {
+      editor.setValue(value);
+      if (height === 'auto') {
+        setTimeout(() => {
+          applyEditorHeight(getContentHeight());
+          editor.layout();
+        }, 0);
+      }
+    }
+  });
+
+  // Sync editor theme when prop changes
+  $effect(() => {
+    if (!editorReady || !editor || !monacoLib) return;
+    monacoLib.editor.setTheme(theme);
+  });
+
+  // Sync editor language when prop changes
+  $effect(() => {
+    if (!editorReady || !editor || !monacoLib) return;
+    const model = editor.getModel();
+    if (model) {
+      monacoLib.editor.setModelLanguage(model, language);
+    }
+  });
 
   onMount(async () => {
-    // Initialize Monaco via loader which configures workers correctly for bundlers like Vite
     monacoLib = await loader.init();
 
     patchCaretRangeFallback(container?.ownerDocument ?? document);
 
-    // Helper: wait until the editor container is actually visible in layout.
-    // Monaco's hit-testing can fail with null nodes when created in hidden/offscreen containers
-    // (for example inside a collapsed sidebar). We poll via requestAnimationFrame until the
-    // container has a non-zero layout rect and is connected.
     async function waitForContainerVisible(el: HTMLElement | undefined | null, timeout = 3000) {
       if (!el) return;
       const start = performance.now();
@@ -129,7 +175,6 @@
               return;
             }
             if (performance.now() - start > timeout) {
-              // timeout: resolve anyway to avoid blocking; Monaco will still attempt to create
               resolve();
               return;
             }
@@ -142,7 +187,6 @@
       });
     }
 
-    // Configure Monaco Editor
     if (monacoLib.languages && monacoLib.languages.typescript) {
       monacoLib.languages.typescript.javascriptDefaults.setCompilerOptions({
         target: monacoLib.languages.typescript.ScriptTarget.ES2020,
@@ -157,7 +201,6 @@
         typeRoots: ['node_modules/@types']
       });
 
-      // Add common type definitions
       monacoLib.languages.typescript.javascriptDefaults.addExtraLib(`
         declare const d3: any;
         declare const Plot: any;
@@ -171,10 +214,8 @@
       `, 'global.d.ts');
     }
 
-    // Wait for the container to be laid out to reduce chance of hitTest null errors
     await waitForContainerVisible(container);
 
-    // Create editor (guard with try/catch to log unexpected failures)
     try {
       editor = monacoLib.editor.create(container, {
         value,
@@ -214,21 +255,17 @@
         }
       });
 
-      // Ensure layout is correct immediately after creation and when the container resizes
       try {
-        // small defer to let layout settle
         setTimeout(() => {
           try { editor.layout(); } catch {}
         }, 0);
 
-        // Use a ResizeObserver on the container to trigger layout when size changes
         if (typeof ResizeObserver !== 'undefined') {
           const ro = new ResizeObserver(() => {
             try { editor.layout(); } catch {}
           });
           ro.observe(container);
         } else {
-          // Fallback to window resize event
           const onWinResize = () => {
             try { editor.layout(); } catch {}
           };
@@ -238,22 +275,17 @@
         // no-op if layout helpers fail
       }
 
-      // Update height on content change
       editor.onDidChangeModelContent(() => {
         const newValue = editor.getValue();
         if (newValue !== value) {
-          value = newValue;
-          dispatch('change', { value: newValue });
+          onchange?.({ value: newValue });
         }
 
-        // Height is updated via onDidContentSizeChange; schedule a fallback
-        // sync in case the content-size event fires before the model settles.
         if (height === 'auto') scheduleHeightSync([80]);
       });
 
       contentSizeDisposable = editor.onDidContentSizeChange((e: any) => {
         if (height !== 'auto') return;
-        // Use Monaco's exact content height from the event — no estimation needed.
         const h = e?.contentHeight;
         if (h != null && Number.isFinite(h) && h > 0) {
           applyEditorHeight(h);
@@ -263,7 +295,6 @@
         editor.layout();
       });
 
-      // Initial height calculation
       if (height === 'auto') {
         const syncHeights = () => {
           applyEditorHeight(getContentHeight());
@@ -273,35 +304,29 @@
         [80, 200, 400].forEach(delay => setTimeout(syncHeights, delay));
       }
 
-      // Add a DOM-level keydown listener in capture phase to ensure shortcuts
-      // are handled even when Monaco internals consume events.
       const domKeyHandler = (e: KeyboardEvent) => {
-        // Shift+Enter: Run and move to next cell
         if (e.shiftKey && e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           e.stopPropagation();
-          dispatch('runAndAdvance');
-        }
-        // Ctrl/Cmd+Enter: Just run the cell
-        else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
+          onrunAndAdvance?.();
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           e.stopPropagation();
-          dispatch('run');
+          onrun?.();
         }
       };
 
-      // Use capture so we see events before Monaco may stop propagation
       container.addEventListener('keydown', domKeyHandler, true);
 
       const forwardFocus = () => {
-        dispatch('editorFocus');
-        dispatch('focus');
+        oneditorFocus?.();
+        onfocus?.();
       };
       try {
         focusDisposable = editor.onDidFocusEditorWidget(forwardFocus);
         blurDisposable = editor.onDidBlurEditorWidget(() => {
-          dispatch('editorBlur');
-          dispatch('blur');
+          oneditorBlur?.();
+          onblur?.();
         });
       } catch {
         focusDisposable = null;
@@ -326,7 +351,6 @@
         }
       };
 
-      // Add AI code completion shortcuts
       editor.addCommand(monacoLib.KeyMod.CtrlCmd | monacoLib.KeyCode.Space, () => {
         triggerAICompletion();
       });
@@ -335,20 +359,17 @@
         triggerAIGeneration();
       });
 
-      // Register AI completion provider
       registerAICompletionProvider();
 
-      // Focus the editor
+      editorReady = true;
       try { editor.focus(); } catch {}
     } catch (err) {
-      // If editor creation fails, surface a console warning but do not crash the app.
       try {
         console.warn('Monaco editor creation failed:', err);
       } catch {}
     }
   });
 
-  // AI completion functions
   async function triggerAICompletion() {
     if (!editor || !aiService.isConfigured() || !monacoLib) return;
 
@@ -369,7 +390,7 @@
       if (completion.completions.length > 0) {
         const suggestion = completion.completions[0];
         editor.executeEdits('ai-completion', [{
-    range: new monacoLib.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+          range: new monacoLib.Range(position.lineNumber, position.column, position.lineNumber, position.column),
           text: suggestion
         }]);
       }
@@ -379,7 +400,7 @@
   }
 
   async function triggerAIGeneration() {
-     if (!editor || !aiService.isConfigured()) return;
+    if (!editor || !aiService.isConfigured()) return;
 
     const selection = editor.getSelection();
     const model = editor.getModel();
@@ -402,7 +423,7 @@
           text: generation.code
         }]);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('AI generation failed:', error);
       alert(`AI generation failed: ${error.message}`);
     }
@@ -412,7 +433,7 @@
     if (!aiService.isConfigured() || !monacoLib) return;
 
     monacoLib.languages.registerCompletionItemProvider('javascript', {
-      provideCompletionItems: async (model, position) => {
+      provideCompletionItems: async (model: any, position: any) => {
         try {
           const code = model.getValue();
           const offset = model.getOffsetAt(position);
@@ -424,12 +445,12 @@
           });
 
           return {
-            suggestions: completion.completions.map((text, index) => ({
+            suggestions: completion.completions.map((text: string, index: number) => ({
               label: `AI: ${text.substring(0, 50)}...`,
               kind: monacoLib.languages.CompletionItemKind.Snippet,
               insertText: text,
               documentation: 'AI-generated completion',
-              sortText: `0${index}` // Prioritize AI suggestions
+              sortText: `0${index}`
             }))
           };
         } catch (error) {
@@ -457,31 +478,6 @@
       contentSizeDisposable?.dispose();
     } catch {}
   });
-
-  // Update editor value when prop changes
-  $: if (editor && value !== editor.getValue()) {
-    editor.setValue(value);
-    // onDidContentSizeChange will fire and resize; this is just a safety fallback.
-    if (height === 'auto') {
-      setTimeout(() => {
-        applyEditorHeight(getContentHeight());
-        editor.layout();
-      }, 0);
-    }
-  }
-
-  // Update editor theme when prop changes
-  $: if (editor && theme && monacoLib) {
-    monacoLib.editor.setTheme(theme);
-  }
-
-  // Update editor language when prop changes
-  $: if (editor && language && monacoLib) {
-    const model = editor.getModel();
-    if (model) {
-      monacoLib.editor.setModelLanguage(model, language);
-    }
-  }
 
   export function focus() {
     if (editor) {

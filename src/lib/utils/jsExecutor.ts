@@ -243,7 +243,7 @@ export class JavaScriptExecutor {
         // Hoist top-level declarations into the shared scope and wrap execution
         // in `with(scope)` so prior-cell variables are readable as plain names.
         const transformedBody = this.transformForScope(execBody);
-        const globalEval = (0, eval) as (s: string) => any;
+        const globalEval = window.eval as (s: string) => any;
         const wrapped = `(async () => { with(window.__tangent_scope) {\n${transformedBody}\n} })()`;
         const iifeResult = globalEval(wrapped);
         let returnedValue: any = undefined;
@@ -483,7 +483,7 @@ export class JavaScriptExecutor {
 
       const transformedBody = this.transformForScope(funcBody);
       const asyncIIFE = `(async () => { with(window.__tangent_scope) {\n${transformedBody}\n} })()`;
-      const globalEval = (0, eval) as (s: string) => any;
+      const globalEval = window.eval as (s: string) => any;
       const returnedValue = await globalEval(asyncIIFE);
 
       // Sync scope: fallback for destructuring declarations

@@ -1,10 +1,14 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
   import { currentNotebook } from '../stores/notebook';
   import { ExportService } from '../utils/exportService';
   import type { Notebook } from '../types/notebook';
 
-  const dispatch = createEventDispatcher();
+  interface Props {
+    onclose?: () => void;
+  }
+
+  let { onclose }: Props = $props();
+
   const exportService = new ExportService();
 
   type ExportFormat = 'js' | 'html-static' | 'html-runnable';
@@ -38,8 +42,8 @@
     }
   ];
 
-  let exportFormat: ExportFormat = 'js';
-  $: activeChoice = EXPORT_CHOICES.find((option) => option.value === exportFormat) ?? EXPORT_CHOICES[0];
+  let exportFormat: ExportFormat = $state('js');
+  let activeChoice = $derived(EXPORT_CHOICES.find((option) => option.value === exportFormat) ?? EXPORT_CHOICES[0]);
 
   function slugify(value: string): string {
     return value
@@ -100,27 +104,23 @@
       return;
     }
 
-    dispatch('close');
-  }
-
-  function handleClose() {
-    dispatch('close');
+    onclose?.();
   }
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
-      handleClose();
+      onclose?.();
     }
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="export-modal">
   <div class="export-content">
     <div class="export-header">
       <h3>Export Notebook</h3>
-      <button class="close-btn" on:click={handleClose} aria-label="Close export dialog">×</button>
+      <button class="close-btn" onclick={() => onclose?.()} aria-label="Close export dialog">×</button>
     </div>
 
     <div class="export-body">
@@ -153,12 +153,8 @@
     </div>
 
     <div class="export-footer">
-      <button class="cancel-btn" on:click={handleClose}>
-        Cancel
-      </button>
-      <button class="export-btn" on:click={handleExport}>
-        {activeChoice.button}
-      </button>
+      <button class="cancel-btn" onclick={() => onclose?.()}>Cancel</button>
+      <button class="export-btn" onclick={handleExport}>{activeChoice.button}</button>
     </div>
   </div>
 </div>
@@ -191,11 +187,7 @@
     border-bottom: 1px solid #e5e7eb;
   }
 
-  .export-header h3 {
-    margin: 0;
-    font-size: 1.15rem;
-    font-weight: 600;
-  }
+  .export-header h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
 
   .close-btn {
     background: none;
@@ -211,13 +203,9 @@
     justify-content: center;
   }
 
-  .close-btn:hover {
-    color: #374151;
-  }
+  .close-btn:hover { color: #374151; }
 
-  .export-body {
-    padding: 1.5rem;
-  }
+  .export-body { padding: 1.5rem; }
 
   .notebook-info {
     margin-bottom: 1.75rem;
@@ -226,30 +214,12 @@
     border-radius: 0.4rem;
   }
 
-  .notebook-info h4 {
-    margin: 0 0 0.25rem 0;
-    font-size: 1rem;
-    font-weight: 600;
-  }
+  .notebook-info h4 { margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; }
+  .notebook-info p { margin: 0; font-size: 0.85rem; color: #6b7280; }
 
-  .notebook-info p {
-    margin: 0;
-    font-size: 0.85rem;
-    color: #6b7280;
-  }
+  .option-group h5 { margin: 0 0 0.75rem 0; font-size: 0.85rem; font-weight: 600; color: #374151; }
 
-  .option-group h5 {
-    margin: 0 0 0.75rem 0;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #374151;
-  }
-
-  .radio-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
+  .radio-group { display: flex; flex-direction: column; gap: 0.5rem; }
 
   .radio-group label {
     display: flex;
@@ -261,30 +231,13 @@
     transition: background-color 0.2s ease;
   }
 
-  .radio-group label:hover {
-    background: #f4f5f7;
-  }
+  .radio-group label:hover { background: #f4f5f7; }
 
-  .radio-label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
+  .radio-label { display: flex; flex-direction: column; gap: 0.15rem; }
+  .radio-label strong { font-weight: 600; color: #1f2933; }
+  .radio-label small { font-size: 0.78rem; color: #64748b; }
 
-  .radio-label strong {
-    font-weight: 600;
-    color: #1f2933;
-  }
-
-  .radio-label small {
-    font-size: 0.78rem;
-    color: #64748b;
-  }
-
-  input[type="radio"] {
-    margin: 0;
-    margin-top: 0.2rem;
-  }
+  input[type="radio"] { margin: 0; margin-top: 0.2rem; }
 
   .export-footer {
     display: flex;
@@ -294,8 +247,7 @@
     border-top: 1px solid #e5e7eb;
   }
 
-  .cancel-btn,
-  .export-btn {
+  .cancel-btn, .export-btn {
     padding: 0.55rem 1.1rem;
     border-radius: 0.4rem;
     font-size: 0.85rem;
@@ -305,23 +257,8 @@
     border: 1px solid transparent;
   }
 
-  .cancel-btn {
-    background: white;
-    color: #374151;
-    border-color: #d1d5db;
-  }
-
-  .cancel-btn:hover {
-    background: #f3f4f6;
-  }
-
-  .export-btn {
-    background: #1a1a1a;
-    color: #ffffff;
-    border-color: #1a1a1a;
-  }
-
-  .export-btn:hover {
-    background: #111827;
-  }
+  .cancel-btn { background: white; color: #374151; border-color: #d1d5db; }
+  .cancel-btn:hover { background: #f3f4f6; }
+  .export-btn { background: #1a1a1a; color: #ffffff; border-color: #1a1a1a; }
+  .export-btn:hover { background: #111827; }
 </style>

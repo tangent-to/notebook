@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { currentNotebook } from '../stores/notebook';
 
-  const dispatch = createEventDispatcher();
-
-  let activeTab: 'info' | 'variables' = 'info';
-  let variables: Record<string, any> = {};
-  let refreshTimer: number | null = null;
-
-  function handleClose() {
-    dispatch('close');
+  interface Props {
+    onclose?: () => void;
   }
+
+  let { onclose }: Props = $props();
+
+  let activeTab: 'info' | 'variables' = $state('info');
+  let variables: Record<string, any> = $state({});
+  let refreshTimer: number | null = null;
 
   function refreshVariables() {
     const scope = (window as any).__tangent_scope;
@@ -62,16 +62,16 @@
     if (refreshTimer) clearInterval(refreshTimer);
   });
 
-  $: varEntries = Object.entries(variables);
+  let varEntries = $derived(Object.entries(variables));
 </script>
 
 <div class="right-sidebar">
   <div class="sidebar-header">
     <div class="tab-bar">
-      <button class="tab-btn" class:active={activeTab === 'info'} on:click={() => activeTab = 'info'}>Info</button>
-      <button class="tab-btn" class:active={activeTab === 'variables'} on:click={() => { activeTab = 'variables'; refreshVariables(); }}>Variables</button>
+      <button class="tab-btn" class:active={activeTab === 'info'} onclick={() => activeTab = 'info'}>Info</button>
+      <button class="tab-btn" class:active={activeTab === 'variables'} onclick={() => { activeTab = 'variables'; refreshVariables(); }}>Variables</button>
     </div>
-    <button class="close-btn" on:click={handleClose}>
+    <button class="close-btn" onclick={() => onclose?.()}>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="4" y1="4" x2="12" y2="12"/>
         <line x1="12" y1="4" x2="4" y2="12"/>
@@ -132,7 +132,7 @@
     <div class="sidebar-content">
       <div class="variables-header">
         <h4 class="section-title">Scope Variables</h4>
-        <button class="refresh-btn" on:click={refreshVariables} title="Refresh">
+        <button class="refresh-btn" onclick={refreshVariables} title="Refresh">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M1 7a6 6 0 0111.2-3M13 7a6 6 0 01-11.2 3"/>
             <path d="M1 2v3h3M13 12v-3h-3"/>
@@ -159,11 +159,7 @@
 </div>
 
 <style>
-  .right-sidebar {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-  }
+  .right-sidebar { height: 100%; display: flex; flex-direction: column; }
 
   .sidebar-header {
     display: flex;
@@ -173,10 +169,7 @@
     border-bottom: 1px solid #e8e8e8;
   }
 
-  .tab-bar {
-    display: flex;
-    gap: 0;
-  }
+  .tab-bar { display: flex; gap: 0; }
 
   .tab-btn {
     background: transparent;
@@ -190,15 +183,8 @@
     transition: all 0.15s ease;
   }
 
-  .tab-btn:hover {
-    color: #1a1a1a;
-    background-color: #f5f5f5;
-  }
-
-  .tab-btn.active {
-    color: #1a1a1a;
-    background-color: #e8e8e8;
-  }
+  .tab-btn:hover { color: #1a1a1a; background-color: #f5f5f5; }
+  .tab-btn.active { color: #1a1a1a; background-color: #e8e8e8; }
 
   .close-btn {
     background: transparent;
@@ -213,20 +199,11 @@
     transition: all 0.15s ease;
   }
 
-  .close-btn:hover {
-    background-color: #f0f0f0;
-    color: #1a1a1a;
-  }
+  .close-btn:hover { background-color: #f0f0f0; color: #1a1a1a; }
 
-  .sidebar-content {
-    padding: 1rem;
-    overflow-y: auto;
-    flex: 1;
-  }
+  .sidebar-content { padding: 1rem; overflow-y: auto; flex: 1; }
 
-  .info-section {
-    margin-bottom: 0.75rem;
-  }
+  .info-section { margin-bottom: 0.75rem; }
 
   .info-label {
     font-size: 0.75rem;
@@ -236,28 +213,13 @@
     letter-spacing: 0.5px;
   }
 
-  .info-value {
-    font-size: 0.875rem;
-    color: #1a1a1a;
-    font-weight: 500;
-  }
+  .info-value { font-size: 0.875rem; color: #1a1a1a; font-weight: 500; }
 
-  .divider {
-    height: 1px;
-    background-color: #e8e8e8;
-    margin: 1.1rem 0;
-  }
+  .divider { height: 1px; background-color: #e8e8e8; margin: 1.1rem 0; }
 
-  .shortcuts-section {
-    margin-top: 0.5rem;
-  }
+  .shortcuts-section { margin-top: 0.5rem; }
 
-  .section-title {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #1a1a1a;
-    margin: 0 0 0.75rem 0;
-  }
+  .section-title { font-size: 0.85rem; font-weight: 600; color: #1a1a1a; margin: 0 0 0.75rem 0; }
 
   .shortcut-item {
     display: flex;
@@ -276,12 +238,8 @@
     font-family: monospace;
   }
 
-  .shortcut-desc {
-    font-size: 0.8125rem;
-    color: #4a4a4a;
-  }
+  .shortcut-desc { font-size: 0.8125rem; color: #4a4a4a; }
 
-  /* Variables tab */
   .variables-header {
     display: flex;
     align-items: center;
@@ -301,23 +259,11 @@
     transition: all 0.15s ease;
   }
 
-  .refresh-btn:hover {
-    background-color: #f0f0f0;
-    color: #1a1a1a;
-  }
+  .refresh-btn:hover { background-color: #f0f0f0; color: #1a1a1a; }
 
-  .empty-vars {
-    font-size: 0.8rem;
-    color: #9ca3af;
-    padding: 1rem 0;
-    text-align: center;
-  }
+  .empty-vars { font-size: 0.8rem; color: #9ca3af; padding: 1rem 0; text-align: center; }
 
-  .variables-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
+  .variables-list { display: flex; flex-direction: column; gap: 0.5rem; }
 
   .var-item {
     padding: 0.5rem;
@@ -334,11 +280,7 @@
     margin-bottom: 0.2rem;
   }
 
-  .var-meta {
-    display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-  }
+  .var-meta { display: flex; gap: 0.5rem; align-items: baseline; }
 
   .var-type {
     font-size: 0.65rem;

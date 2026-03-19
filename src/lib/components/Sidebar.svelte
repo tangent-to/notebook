@@ -1,6 +1,6 @@
 <script lang="ts">
   // Minimal Sidebar placeholder. Menu moved to App.svelte.
-  export let collapsed: boolean = false;
+  let { collapsed = false }: { collapsed?: boolean } = $props();
 </script>
 
 <div class="sidebar-placeholder" aria-hidden="true"></div>
