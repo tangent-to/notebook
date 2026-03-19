@@ -2,10 +2,10 @@
   import type { CellOutput } from '../types/notebook';
   import JSONFormatter from 'json-formatter-js';
 
-  export let output: CellOutput;
+  let { output }: { output: CellOutput } = $props();
 
-  let renderError: string | null = null;
-  let copyLabel = 'Copy';
+  let renderError: string | null = $state(null);
+  let copyLabel = $state('Copy');
 
   function formatTimestamp(timestamp: number): string {
     return new Date(timestamp).toLocaleTimeString();
@@ -42,7 +42,6 @@
       copyLabel = 'Copied!';
       setTimeout(() => { copyLabel = 'Copy'; }, 1500);
     } catch {
-      // Fallback for older browsers
       const textarea = document.createElement('textarea');
       textarea.value = getOutputText();
       textarea.style.position = 'fixed';
@@ -56,7 +55,6 @@
     }
   }
 
-  // Action to insert a live DOM element with error boundary
   function insertLiveElement(node: HTMLElement, element: Element | null) {
     if (element) {
       try {
@@ -92,7 +90,7 @@
             }
           }
         };
-      } catch (err) {
+      } catch (err: any) {
         renderError = `Failed to render DOM output: ${err?.message || String(err)}`;
         return { destroy() {} };
       }
@@ -106,7 +104,6 @@
     };
   }
 
-  // Render collapsible JSON using json-formatter-js
   function renderJson(node: HTMLElement, value: string | object | null | undefined) {
     let formatterEl: HTMLElement | null = null;
 
@@ -172,7 +169,7 @@
             <path d="M8 4v5M8 11v1" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/>
           </svg>
           <span class="error-label">Render Error</span>
-          <button class="copy-btn" on:click={handleCopy}>{copyLabel}</button>
+          <button class="copy-btn" onclick={handleCopy}>{copyLabel}</button>
         </div>
         <pre class="error-message"><code>{renderError}</code></pre>
       </div>
@@ -180,7 +177,7 @@
   {:else}
     <div class="output-content {output.type}">
       {#if output.type === 'dom'}
-        <div class="dom-output" use:insertLiveElement={output.content}></div>
+        <div class="dom-output" use:insertLiveElement={output.content as Element}></div>
       {:else if output.type === 'html'}
         <div class="html-output">
           {@html output.content}
@@ -195,7 +192,7 @@
               <path d="M8 4v5M8 11v1" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/>
             </svg>
             <span class="error-label">Error</span>
-            <button class="copy-btn" on:click={handleCopy}>{copyLabel}</button>
+            <button class="copy-btn" onclick={handleCopy}>{copyLabel}</button>
           </div>
           <pre class="error-message"><code>{String(output.content)}</code></pre>
         </div>
@@ -206,7 +203,7 @@
   {/if}
 
   <div class="output-footer">
-    <button class="copy-btn" on:click={handleCopy} title="Copy output">
+    <button class="copy-btn" onclick={handleCopy} title="Copy output">
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
         <rect x="5" y="5" width="9" height="9" rx="1.5"/>
         <path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/>
@@ -219,12 +216,17 @@
 
 <style>
   .output-container {
-    margin-top: 0.5rem;
-    padding-top: 0.4rem;
+    margin-top: 0.2rem;
+    padding-top: 0.15rem;
+    position: relative;
+  }
+
+  .output-container:hover .output-footer {
+    opacity: 1;
   }
 
   .output-content {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0;
   }
 
   .dom-output,
@@ -380,11 +382,22 @@
   }
 
   .output-footer {
+    position: absolute;
+    bottom: 0;
+    right: 0;
     display: flex;
-    justify-content: flex-end;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.1rem 0.5rem 0.25rem;
+    padding: 0 0.5rem 0.1rem;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+    z-index: 1;
+    background: linear-gradient(to right, transparent, rgba(255,255,255,0.9) 20%);
+  }
+
+  .output-container:hover .output-footer {
+    pointer-events: auto;
   }
 
   .output-timestamp {
@@ -420,7 +433,6 @@
     font-size: 0.875rem;
   }
 
-  /* Ensure D3/Plot visualizations display properly */
   .html-output :global(.plot) {
     max-width: 100%;
     overflow-x: auto;

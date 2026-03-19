@@ -22,36 +22,29 @@
   import { saveNotebook, parseJSNotebook, importNotebookFromFile } from './lib/utils/fileOperations';
   import { loadFromLocalStorage, getLocalStorageMeta, saveToLocalStorage } from './lib/utils/webPersistence';
 
-  let rightSidebarOpen = false;
-  let chatSidebarOpen = false;
-  let showExportDialog = false;
-  let showCommandPalette = false;
-  let showRestoreBanner = false;
-  let restoreMeta: { savedAt: number; name: string; cellCount: number } | null = null;
+  let rightSidebarOpen = $state(false);
+  let chatSidebarOpen = $state(false);
+  let showExportDialog = $state(false);
+  let showCommandPalette = $state(false);
 
-  // Export function for child component to call
   export function runAllCells() {
     window.dispatchEvent(new CustomEvent('run-all-cells'));
   }
 
   onMount(() => {
-    // Check for saved notebook in localStorage first
     const meta = getLocalStorageMeta();
     const saved = loadFromLocalStorage();
 
     if (saved && meta) {
-      // Restore from localStorage
       currentNotebook.set(saved);
       markNotebookClean();
       console.info('Notebook restored from previous session');
     } else {
-      // Load sample notebook
       loadSampleNotebook();
     }
 
     loadNotebookFiles();
 
-    // Auto-save to localStorage on every change
     const unsubscribe = currentNotebook.subscribe(notebook => {
       if (notebook) {
         saveToLocalStorage(notebook);
@@ -143,9 +136,7 @@
     });
   }
 
-  function handleCommand(event: CustomEvent) {
-    const commandId = event.detail.id;
-
+  function handleCommand({ id: commandId }: { id: string }) {
     switch (commandId) {
       case 'new-notebook':
         handleNewNotebook();
@@ -232,14 +223,9 @@
     });
   }
 
-  function handleInsertCode(event: CustomEvent) {
-    const { code } = event.detail;
-
+  function handleInsertCode({ code }: { code: string }) {
     const notebook = get(currentNotebook);
     if (!notebook) return;
-
-    const newCell = createNewCell('code');
-    newCell.content = code;
 
     const lastCell = notebook.cells[notebook.cells.length - 1];
     const updatedNotebook = addCellAfter(notebook, lastCell.id, 'code');
@@ -247,35 +233,34 @@
     updatedNotebook.cells[updatedNotebook.cells.length - 1].content = code;
 
     currentNotebook.set(updatedNotebook);
-    selectedCellId.set(newCell.id);
   }
 </script>
 
-<svelte:window on:keydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} />
 
 <div class="app-container">
   <!-- Observable-style header -->
   <header class="app-header">
     <div class="header-left">
-      <button class="notebooks-btn" on:click={() => showCommandPalette = true} title="Command Palette (Ctrl+K)">
+      <button class="notebooks-btn" onclick={() => showCommandPalette = true} title="Command Palette (Ctrl+K)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 8h10M8 3l5 5-5 5"/>
         </svg>
         <kbd class="kbd-hint">⌘K</kbd>
       </button>
-      <button class="notebooks-btn" on:click={handleNewNotebook} title="New Notebook (Ctrl+N)">
+      <button class="notebooks-btn" onclick={handleNewNotebook} title="New Notebook (Ctrl+N)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M8 3v10M3 8h10"/>
         </svg>
         New
       </button>
-      <button class="notebooks-btn" on:click={handleImportNotebook} title="Import Notebook (Ctrl+O)">
+      <button class="notebooks-btn" onclick={handleImportNotebook} title="Import Notebook (Ctrl+O)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 10v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2M8 2v9M5 8l3 3 3-3"/>
         </svg>
         Import
       </button>
-      <button class="notebooks-btn" on:click={handleExportNotebook} title="Export Notebook">
+      <button class="notebooks-btn" onclick={handleExportNotebook} title="Export Notebook">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 10v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2M8 11V3M5 6l3-3 3 3"/>
         </svg>
@@ -294,7 +279,7 @@
         <span class="header-separator">•</span>
         <button
           class="run-all-header-btn"
-          on:click={() => window.dispatchEvent(new CustomEvent('run-all-cells'))}
+          onclick={() => window.dispatchEvent(new CustomEvent('run-all-cells'))}
           title="Run All Cells"
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -307,14 +292,14 @@
       <button
         class="icon-btn"
         class:active={chatSidebarOpen}
-        on:click={() => chatSidebarOpen = !chatSidebarOpen}
+        onclick={() => chatSidebarOpen = !chatSidebarOpen}
         title="AI Assistant (Ctrl+/)"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z"/>
         </svg>
       </button>
-      <button class="icon-btn" on:click={toggleRightSidebar} title="Info">
+      <button class="icon-btn" onclick={toggleRightSidebar} title="Info">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="10" cy="10" r="8"/>
           <path d="M10 14v-4M10 6v.5"/>
@@ -331,26 +316,26 @@
     {#if chatSidebarOpen}
       <aside class="chat-sidebar-container">
         <ChatSidebar
-          on:close={() => chatSidebarOpen = false}
-          on:insertCode={handleInsertCode}
+          onclose={() => chatSidebarOpen = false}
+          oninsertCode={handleInsertCode}
         />
       </aside>
     {/if}
 
     {#if rightSidebarOpen}
       <aside class="right-sidebar-container">
-        <RightSidebar on:close={() => rightSidebarOpen = false} />
+        <RightSidebar onclose={() => rightSidebarOpen = false} />
       </aside>
     {/if}
   </div>
 
   <CommandPalette
     bind:visible={showCommandPalette}
-    on:command={handleCommand}
+    oncommand={handleCommand}
   />
 
   {#if showExportDialog}
-    <ExportDialog on:close={() => showExportDialog = false} />
+    <ExportDialog onclose={() => showExportDialog = false} />
   {/if}
 </div>
 

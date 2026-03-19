@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import Cell from './Cell.svelte';
   import { currentNotebook, selectedCellId, markNotebookDirty, getNextExecutionOrder, resetExecutionCounter } from '../stores/notebook';
   import {
@@ -20,52 +20,47 @@
   let dragOverCellId: string | null = null;
   let dragOverPosition: 'above' | 'below' | null = null;
 
+  const handleRunAllEvent = () => handleRunAll();
+
   onMount(async () => {
     jsExecutor = new JavaScriptExecutor();
     await jsExecutor.setupCommonLibraries();
-
-    const handleRunAllEvent = () => handleRunAll();
     window.addEventListener('run-all-cells', handleRunAllEvent);
-
-    return () => {
-      window.removeEventListener('run-all-cells', handleRunAllEvent);
-    };
   });
 
-  function handleContentChange(event: CustomEvent) {
-    const { cellId, content } = event.detail;
+  onDestroy(() => {
+    window.removeEventListener('run-all-cells', handleRunAllEvent);
+  });
+
+  function handleContentChange({ cellId, content }: { cellId: string; content: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return updateCellContent(notebook, cellId, content);
     });
   }
 
-  async function handleRunCell(event: CustomEvent) {
-    const { cellId } = event.detail;
-
-    let notebook = null;
+  async function handleRunCell({ cellId }: { cellId: string }) {
+    let notebook: Notebook | null = null;
     const unsubscribe = currentNotebook.subscribe(n => notebook = n);
     unsubscribe();
 
     if (!notebook) return;
 
-    const cell = notebook.cells.find(c => c.id === cellId);
+    const cell = notebook.cells.find((c: NotebookCell) => c.id === cellId);
     if (!cell) return;
 
     if (cell.type === 'markdown') return;
 
-    // Get execution order number
     const execOrder = getNextExecutionOrder();
 
-    // Set cell as running
-    currentNotebook.update(notebook => {
-      if (!notebook) return notebook;
+    currentNotebook.update(nb => {
+      if (!nb) return nb;
       return {
-        ...notebook,
-        cells: notebook.cells.map(cell =>
-          cell.id === cellId
-            ? { ...cell, isRunning: true, output: undefined, executionOrder: execOrder }
-            : cell
+        ...nb,
+        cells: nb.cells.map((c: NotebookCell) =>
+          c.id === cellId
+            ? { ...c, isRunning: true, output: undefined, executionOrder: execOrder }
+            : c
         )
       };
     });
@@ -78,26 +73,26 @@
 
       const output = await jsExecutor.executeCode(cell.content);
 
-      currentNotebook.update(notebook => {
-        if (!notebook) return notebook;
+      currentNotebook.update(nb => {
+        if (!nb) return nb;
         return {
-          ...notebook,
-          cells: notebook.cells.map(cell =>
-            cell.id === cellId
-              ? { ...cell, isRunning: false, output }
-              : cell
+          ...nb,
+          cells: nb.cells.map((c: NotebookCell) =>
+            c.id === cellId
+              ? { ...c, isRunning: false, output }
+              : c
           )
         };
       });
-    } catch (error) {
-      currentNotebook.update(notebook => {
-        if (!notebook) return notebook;
+    } catch (error: any) {
+      currentNotebook.update(nb => {
+        if (!nb) return nb;
         return {
-          ...notebook,
-          cells: notebook.cells.map(cell =>
-            cell.id === cellId
+          ...nb,
+          cells: nb.cells.map((c: NotebookCell) =>
+            c.id === cellId
               ? {
-                  ...cell,
+                  ...c,
                   isRunning: false,
                   output: {
                     type: 'error',
@@ -105,7 +100,7 @@
                     timestamp: Date.now()
                   }
                 }
-              : cell
+              : c
           )
         };
       });
@@ -113,7 +108,7 @@
   }
 
   async function handleRunAll() {
-    let notebook = null;
+    let notebook: Notebook | null = null;
     const unsubscribe = currentNotebook.subscribe(n => notebook = n);
     unsubscribe();
 
@@ -124,7 +119,7 @@
 
     for (const cell of notebook.cells) {
       if (cell.type === 'code') {
-        await handleRunCell({ detail: { cellId: cell.id } });
+        await handleRunCell({ cellId: cell.id });
         await new Promise(resolve => setTimeout(resolve, 100));
       } else if (cell.type === 'markdown') {
         const event = new CustomEvent('render-markdown', { detail: { cellId: cell.id } });
@@ -136,23 +131,21 @@
     isRunningAll = false;
   }
 
-  async function handleRunAndAdvance(event: CustomEvent) {
-    const { cellId } = event.detail;
-    await handleRunCell(event);
+  async function handleRunAndAdvance({ cellId }: { cellId: string }) {
+    await handleRunCell({ cellId });
 
-    let notebook = null;
+    let notebook: Notebook | null = null;
     const unsub = currentNotebook.subscribe(n => notebook = n);
     unsub();
     if (!notebook) return;
-    const idx = notebook.cells.findIndex(c => c.id === cellId);
+    const idx = notebook.cells.findIndex((c: NotebookCell) => c.id === cellId);
     if (idx >= 0 && idx < notebook.cells.length - 1) {
       const next = notebook.cells[idx + 1];
       selectedCellId.set(next.id);
     }
   }
 
-  function handleSelectCell(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleSelectCell({ cellId }: { cellId: string }) {
     selectedCellId.set(cellId);
   }
 
@@ -196,13 +189,12 @@
     }
   }
 
-  function handleAddCell(event: CustomEvent) {
-    const { afterCellId } = event.detail;
+  function handleAddCell({ afterCellId }: { afterCellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       const updatedNotebook = addCellAfter(notebook, afterCellId);
-      const newCell = updatedNotebook.cells.find(cell =>
-        !notebook.cells.some(oldCell => oldCell.id === cell.id)
+      const newCell = updatedNotebook.cells.find((cell: NotebookCell) =>
+        !notebook.cells.some((oldCell: NotebookCell) => oldCell.id === cell.id)
       );
       if (newCell) {
         selectedCellId.set(newCell.id);
@@ -211,8 +203,7 @@
     });
   }
 
-  function handleDeleteCell(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleDeleteCell({ cellId }: { cellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return deleteCell(notebook, cellId);
@@ -221,30 +212,27 @@
     selectedCellId.update(selected => selected === cellId ? null : selected);
   }
 
-  function handleMoveUp(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleMoveUp({ cellId }: { cellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return moveCellUp(notebook, cellId);
     });
   }
 
-  function handleMoveDown(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleMoveDown({ cellId }: { cellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return moveCellDown(notebook, cellId);
     });
   }
 
-  function handleCellTypeChange(event: CustomEvent) {
-    const { cellId, type } = event.detail;
+  function handleCellTypeChange({ cellId, type }: { cellId: string; type: 'code' | 'markdown' }) {
     markNotebookDirty();
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return {
         ...notebook,
-        cells: notebook.cells.map(cell =>
+        cells: notebook.cells.map((cell: NotebookCell) =>
           cell.id === cellId
             ? { ...cell, type, output: undefined }
             : cell
@@ -254,13 +242,12 @@
     });
   }
 
-  function handleToggleCollapse(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleToggleCollapse({ cellId }: { cellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return {
         ...notebook,
-        cells: notebook.cells.map(cell =>
+        cells: notebook.cells.map((cell: NotebookCell) =>
           cell.id === cellId
             ? { ...cell, collapsed: !cell.collapsed }
             : cell
@@ -269,13 +256,12 @@
     });
   }
 
-  function handleToggleOutputCollapse(event: CustomEvent) {
-    const { cellId } = event.detail;
+  function handleToggleOutputCollapse({ cellId }: { cellId: string }) {
     currentNotebook.update(notebook => {
       if (!notebook) return notebook;
       return {
         ...notebook,
-        cells: notebook.cells.map(cell =>
+        cells: notebook.cells.map((cell: NotebookCell) =>
           cell.id === cellId
             ? { ...cell, outputCollapsed: !cell.outputCollapsed }
             : cell
@@ -287,24 +273,23 @@
   async function runCellById(cellId: string): Promise<void> {
     const notebook = getNotebookSnapshot();
     if (!notebook) return;
-    const cell = notebook.cells.find(c => c.id === cellId);
+    const cell = notebook.cells.find((c: NotebookCell) => c.id === cellId);
     if (!cell) return;
 
     if (cell.type === 'markdown') {
       const evt = new CustomEvent('render-markdown', { detail: { cellId } });
       window.dispatchEvent(evt);
     } else {
-      await handleRunCell({ detail: { cellId } } as CustomEvent);
+      await handleRunCell({ cellId });
     }
   }
 
   // Drag-and-drop handlers
-  function handleDragStart(event: CustomEvent) {
-    draggedCellId = event.detail.cellId;
+  function handleDragStart({ cellId }: { cellId: string }) {
+    draggedCellId = cellId;
   }
 
-  function handleDragOver(event: CustomEvent) {
-    const { cellId, position } = event.detail;
+  function handleDragOver({ cellId, position }: { cellId: string; position: 'above' | 'below' }) {
     dragOverCellId = cellId;
     dragOverPosition = position;
   }
@@ -314,8 +299,8 @@
       currentNotebook.update(notebook => {
         if (!notebook) return notebook;
         const cells = [...notebook.cells];
-        const fromIdx = cells.findIndex(c => c.id === draggedCellId);
-        const toIdx = cells.findIndex(c => c.id === dragOverCellId);
+        const fromIdx = cells.findIndex((c: NotebookCell) => c.id === draggedCellId);
+        const toIdx = cells.findIndex((c: NotebookCell) => c.id === dragOverCellId);
         if (fromIdx === -1 || toIdx === -1) return notebook;
 
         const [moved] = cells.splice(fromIdx, 1);
@@ -346,8 +331,7 @@
     if (event.altKey && event.key === 'Enter') {
       event.preventDefault();
       await runCellById(activeCellId);
-      const addEvent = new CustomEvent('add-cell-below', { detail: { afterCellId: activeCellId } });
-      handleAddCell(addEvent);
+      handleAddCell({ afterCellId: activeCellId });
       return;
     }
 
@@ -358,22 +342,21 @@
       const notebookAfter = getNotebookSnapshot();
       if (!notebookAfter) return;
 
-      const idx = notebookAfter.cells.findIndex(c => c.id === activeCellId);
+      const idx = notebookAfter.cells.findIndex((c: NotebookCell) => c.id === activeCellId);
       if (idx === -1) return;
 
       if (idx < notebookAfter.cells.length - 1) {
         const next = notebookAfter.cells[idx + 1];
         selectedCellId.set(next.id);
       } else {
-        const addEvent = new CustomEvent('add-cell-below', { detail: { afterCellId: activeCellId } });
-        handleAddCell(addEvent);
+        handleAddCell({ afterCellId: activeCellId });
       }
       return;
     }
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="notebook-container">
   {#if $currentNotebook}
@@ -384,8 +367,8 @@
         spellcheck="false"
         aria-label="Notebook title"
         data-testid="notebook-title"
-        on:keydown={handleTitleKeydown}
-        on:blur={handleTitleBlur}
+        onkeydown={handleTitleKeydown}
+        onblur={handleTitleBlur}
       >
         {$currentNotebook.name}
       </h1>
@@ -398,20 +381,20 @@
           isSelected={$selectedCellId === cell.id}
           isDraggedOver={dragOverCellId === cell.id}
           dragPosition={dragOverCellId === cell.id ? dragOverPosition : null}
-          on:contentChange={handleContentChange}
-          on:run={handleRunCell}
-          on:runAndAdvance={handleRunAndAdvance}
-          on:select={handleSelectCell}
-          on:addCell={handleAddCell}
-          on:deleteCell={handleDeleteCell}
-          on:moveUp={handleMoveUp}
-          on:moveDown={handleMoveDown}
-          on:typeChange={handleCellTypeChange}
-          on:toggleCollapse={handleToggleCollapse}
-          on:toggleOutputCollapse={handleToggleOutputCollapse}
-          on:dragstart={handleDragStart}
-          on:dragover={handleDragOver}
-          on:dragend={handleDragEnd}
+          oncontentChange={handleContentChange}
+          onrun={handleRunCell}
+          onrunAndAdvance={handleRunAndAdvance}
+          onselect={handleSelectCell}
+          onaddCell={handleAddCell}
+          ondeleteCell={handleDeleteCell}
+          onmoveUp={handleMoveUp}
+          onmoveDown={handleMoveDown}
+          ontypeChange={handleCellTypeChange}
+          ontoggleCollapse={handleToggleCollapse}
+          ontoggleOutputCollapse={handleToggleOutputCollapse}
+          ondragstart={handleDragStart}
+          ondragover={handleDragOver}
+          ondragend={handleDragEnd}
         />
       {/each}
     </div>
@@ -419,7 +402,7 @@
     <div class="notebook-footer">
       <button
         class="add-cell-btn"
-        on:click={() => handleAddCell({ detail: { afterCellId: $currentNotebook.cells[$currentNotebook.cells.length - 1].id } })}
+        onclick={() => handleAddCell({ afterCellId: $currentNotebook!.cells[$currentNotebook!.cells.length - 1].id })}
         data-testid="add-cell-btn"
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">

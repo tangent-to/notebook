@@ -1,49 +1,83 @@
 <script lang="ts">
-  import { createEventDispatcher, tick } from 'svelte';
+  import { tick } from 'svelte';
   import { marked } from 'marked';
   import katex from 'katex';
   import MonacoEditor from './MonacoEditor.svelte';
   import CellOutput from './CellOutput.svelte';
   import type { NotebookCell } from '../types/notebook';
 
-  export let cell: NotebookCell;
-  export let isSelected: boolean = false;
-  export let isDraggedOver: boolean = false;
-  export let dragPosition: 'above' | 'below' | null = null;
-
-  const dispatch = createEventDispatcher();
-
-  let editorRef: MonacoEditor;
-  let isDragging = false;
-
-  function handleContentChange(event: CustomEvent) {
-    dispatch('contentChange', {
-      cellId: cell.id,
-      content: event.detail.value
-    });
+  interface Props {
+    cell: NotebookCell;
+    isSelected?: boolean;
+    isDraggedOver?: boolean;
+    dragPosition?: 'above' | 'below' | null;
+    oncontentChange?: (detail: { cellId: string; content: string }) => void;
+    onrun?: (detail: { cellId: string }) => void;
+    onrunAndAdvance?: (detail: { cellId: string }) => void;
+    onselect?: (detail: { cellId: string }) => void;
+    onaddCell?: (detail: { afterCellId: string }) => void;
+    ondeleteCell?: (detail: { cellId: string }) => void;
+    onmoveUp?: (detail: { cellId: string }) => void;
+    onmoveDown?: (detail: { cellId: string }) => void;
+    ontypeChange?: (detail: { cellId: string; type: 'code' | 'markdown' }) => void;
+    ontoggleCollapse?: (detail: { cellId: string }) => void;
+    ontoggleOutputCollapse?: (detail: { cellId: string }) => void;
+    ondragstart?: (detail: { cellId: string }) => void;
+    ondragover?: (detail: { cellId: string; position: 'above' | 'below' }) => void;
+    ondragend?: () => void;
   }
+
+  let {
+    cell,
+    isSelected = false,
+    isDraggedOver = false,
+    dragPosition = null,
+    oncontentChange,
+    onrun,
+    onrunAndAdvance,
+    onselect,
+    onaddCell,
+    ondeleteCell,
+    onmoveUp,
+    onmoveDown,
+    ontypeChange,
+    ontoggleCollapse,
+    ontoggleOutputCollapse,
+    ondragstart,
+    ondragover,
+    ondragend,
+  }: Props = $props();
+
+  let editorRef: MonacoEditor = $state(null as any);
+  let isDragging = $state(false);
+  let isEditingMarkdown = $state(true);
+  let renderedMarkdown = $state('');
+  let markdownTextarea: HTMLTextAreaElement = $state(null as any);
+  let markdownPreview: any = $state(null);
+
+  let execLabel = $derived(cell.executionOrder ? `[${cell.executionOrder}]` : '[ ]');
 
   function handleRun() {
     if (cell.type === 'markdown') {
       isEditingMarkdown = false;
     }
-    dispatch('run', { cellId: cell.id });
+    onrun?.({ cellId: cell.id });
   }
 
   function handleRunAndAdvance() {
     if (cell.type === 'markdown') {
       isEditingMarkdown = false;
     }
-    dispatch('runAndAdvance', { cellId: cell.id });
+    onrunAndAdvance?.({ cellId: cell.id });
   }
 
   function handleEditMarkdown() {
     isEditingMarkdown = true;
-    dispatch('select', { cellId: cell.id });
+    onselect?.({ cellId: cell.id });
   }
 
   function handleCellClick() {
-    dispatch('select', { cellId: cell.id });
+    onselect?.({ cellId: cell.id });
   }
 
   function handleCellMouseDown(event: MouseEvent) {
@@ -51,7 +85,7 @@
     if (target && target.closest('.jmon-music-player-container')) {
       return;
     }
-    dispatch('select', { cellId: cell.id });
+    onselect?.({ cellId: cell.id });
     if (cell.type === 'code' && editorRef) {
       requestAnimationFrame(() => {
         try {
@@ -63,73 +97,9 @@
     }
   }
 
-  function handleAddCell() {
-    dispatch('addCell', { afterCellId: cell.id });
-  }
-
-  function handleDeleteCell() {
-    dispatch('deleteCell', { cellId: cell.id });
-  }
-
-  function handleMoveUp() {
-    dispatch('moveUp', { cellId: cell.id });
-  }
-
-  function handleMoveDown() {
-    dispatch('moveDown', { cellId: cell.id });
-  }
-
-  function handleCellTypeChange(type: 'code' | 'markdown') {
-    dispatch('typeChange', { cellId: cell.id, type });
-  }
-
   function handleEditorFocus() {
-    dispatch('select', { cellId: cell.id });
+    onselect?.({ cellId: cell.id });
   }
-
-  function handleToggleCollapse() {
-    dispatch('toggleCollapse', { cellId: cell.id });
-  }
-
-  function handleToggleOutputCollapse() {
-    dispatch('toggleOutputCollapse', { cellId: cell.id });
-  }
-
-  // Drag-and-drop handlers
-  function onDragStart(event: DragEvent) {
-    if (!event.dataTransfer) return;
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', cell.id);
-    isDragging = true;
-    dispatch('dragstart', { cellId: cell.id });
-  }
-
-  function onDragOver(event: DragEvent) {
-    event.preventDefault();
-    if (!event.dataTransfer) return;
-    event.dataTransfer.dropEffect = 'move';
-
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const midY = rect.top + rect.height / 2;
-    const position = event.clientY < midY ? 'above' : 'below';
-    dispatch('dragover', { cellId: cell.id, position });
-  }
-
-  function onDragEnd() {
-    isDragging = false;
-    dispatch('dragend');
-  }
-
-  function onDrop(event: DragEvent) {
-    event.preventDefault();
-    dispatch('dragend');
-  }
-
-  // Rendered HTML for markdown preview
-  let renderedMarkdown = '';
-  let markdownPreview: any = null;
-  let isEditingMarkdown = true;
-  let markdownTextarea: HTMLTextAreaElement;
 
   function autoResizeTextarea(textarea: HTMLTextAreaElement) {
     if (textarea) {
@@ -138,34 +108,53 @@
     }
   }
 
-  function handleMarkdownInput(e: Event) {
-    const target = e.target as HTMLTextAreaElement;
-    autoResizeTextarea(target);
-    handleContentChange({ detail: { value: target.value } });
-  }
-
-  $: if (markdownTextarea && cell.type === 'markdown') {
-    autoResizeTextarea(markdownTextarea);
-  }
-
-  async function focusActiveContent() {
-    await tick();
-    if (!isSelected) return;
-
-    if (cell.type === 'code' && editorRef) {
-      editorRef.focus();
-    } else if (cell.type === 'markdown') {
-      if (isEditingMarkdown && markdownTextarea) {
-        markdownTextarea.focus();
-      } else if (markdownPreview) {
-        markdownPreview.focus();
-      }
+  // Auto-resize textarea when it becomes available or cell type changes
+  $effect(() => {
+    if (markdownTextarea && cell.type === 'markdown') {
+      autoResizeTextarea(markdownTextarea);
     }
-  }
+  });
 
-  $: if (isSelected) {
-    focusActiveContent();
-  }
+  // Focus active content when cell becomes selected
+  $effect(() => {
+    if (isSelected) {
+      tick().then(() => {
+        if (!isSelected) return;
+        if (cell.type === 'code' && editorRef) {
+          editorRef.focus();
+        } else if (cell.type === 'markdown') {
+          if (isEditingMarkdown && markdownTextarea) {
+            markdownTextarea.focus();
+          } else if (markdownPreview) {
+            markdownPreview.focus();
+          }
+        }
+      });
+    }
+  });
+
+  // Render markdown
+  $effect(() => {
+    if (cell.type === 'markdown' && cell.content) {
+      try {
+        let md = cell.content || '';
+
+        md = md.replace(/\$\$([\s\S]*?)\$\$/g, (m, expr) => {
+          try {
+            return katex.renderToString(expr, { throwOnError: false, displayMode: true });
+          } catch (e: any) {
+            return `<pre style="color: #dc2626;">${e.message}</pre>`;
+          }
+        });
+
+        renderedMarkdown = (marked(md) as string) || '';
+      } catch (e: any) {
+        renderedMarkdown = `<pre style="color: #dc2626;">Markdown render error: ${e && e.message ? e.message : String(e)}</pre>`;
+      }
+    } else if (cell.type === 'markdown') {
+      renderedMarkdown = '';
+    }
+  });
 
   // Listen for render-markdown event
   if (typeof window !== 'undefined') {
@@ -176,30 +165,35 @@
     });
   }
 
-  $: {
-    if (cell.type === 'markdown' && cell.content) {
-      try {
-        let md = cell.content || '';
-
-        md = md.replace(/\$\$([\s\S]*?)\$\$/g, (m, expr) => {
-          try {
-            return katex.renderToString(expr, { throwOnError: false, displayMode: true });
-          } catch (e) {
-            return `<pre style="color: #dc2626;">${e.message}</pre>`;
-          }
-        });
-
-        renderedMarkdown = marked(md) || '';
-      } catch (e) {
-        renderedMarkdown = `<pre style="color: #dc2626;">Markdown render error: ${e && e.message ? e.message : String(e)}</pre>`;
-      }
-    } else if (cell.type === 'markdown') {
-      renderedMarkdown = '';
-    }
+  // Drag-and-drop handlers
+  function onDragStart(event: DragEvent) {
+    if (!event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', cell.id);
+    isDragging = true;
+    ondragstart?.({ cellId: cell.id });
   }
 
-  // Execution order label
-  $: execLabel = cell.executionOrder ? `[${cell.executionOrder}]` : '[ ]';
+  function onDragOver(event: DragEvent) {
+    event.preventDefault();
+    if (!event.dataTransfer) return;
+    event.dataTransfer.dropEffect = 'move';
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const position = event.clientY < midY ? 'above' : 'below';
+    ondragover?.({ cellId: cell.id, position });
+  }
+
+  function onDragEnd() {
+    isDragging = false;
+    ondragend?.();
+  }
+
+  function onDrop(event: DragEvent) {
+    event.preventDefault();
+    ondragend?.();
+  }
 </script>
 
 <div
@@ -207,19 +201,19 @@
   class:drag-above={isDraggedOver && dragPosition === 'above'}
   class:drag-below={isDraggedOver && dragPosition === 'below'}
   data-testid="cell-{cell.id}"
-  on:dragover={onDragOver}
-  on:drop={onDrop}
+  ondragover={onDragOver}
+  ondrop={onDrop}
 >
   <!-- Left indicator bar (Observable style) -->
   <div class="cell-indicator {isSelected ? 'active' : ''}"></div>
 
   <div
     class="cell-container"
-    on:mousedown|capture={handleCellMouseDown}
-    on:click={handleCellClick}
+    onmousedown={handleCellMouseDown}
+    onclick={handleCellClick}
     role="button"
     tabindex="0"
-    on:keydown={(e) => e.key === 'Enter' && handleCellClick()}
+    onkeydown={(e) => e.key === 'Enter' && handleCellClick()}
   >
     <!-- Cell toolbar -->
     <div class="cell-toolbar" data-testid="cell-toolbar">
@@ -228,8 +222,8 @@
           <span
             class="drag-handle"
             draggable="true"
-            on:dragstart={onDragStart}
-            on:dragend={onDragEnd}
+            ondragstart={onDragStart}
+            ondragend={onDragEnd}
             title="Drag to reorder"
           >
             <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor">
@@ -240,7 +234,7 @@
           </span>
 
           <button
-            on:click|stopPropagation={handleRun}
+            onclick={(e) => { e.stopPropagation(); handleRun(); }}
             class="toolbar-btn run-btn"
             disabled={cell.isRunning}
             title="Run cell (Shift+Enter)"
@@ -261,7 +255,7 @@
 
           <select
             value={cell.type}
-            on:change={(e) => handleCellTypeChange(e.target.value)}
+            onchange={(e) => ontypeChange?.({ cellId: cell.id, type: (e.target as HTMLSelectElement).value as 'code' | 'markdown' })}
             class="cell-type-select"
             data-testid="cell-type-select"
           >
@@ -273,7 +267,7 @@
         <div class="toolbar-right">
           <!-- Collapse toggle -->
           <button
-            on:click|stopPropagation={handleToggleCollapse}
+            onclick={(e) => { e.stopPropagation(); ontoggleCollapse?.({ cellId: cell.id }); }}
             class="toolbar-btn"
             title={cell.collapsed ? 'Expand cell' : 'Collapse cell'}
           >
@@ -288,7 +282,7 @@
 
           {#if cell.output}
             <button
-              on:click|stopPropagation={handleToggleOutputCollapse}
+              onclick={(e) => { e.stopPropagation(); ontoggleOutputCollapse?.({ cellId: cell.id }); }}
               class="toolbar-btn"
               title={cell.outputCollapsed ? 'Show output' : 'Hide output'}
             >
@@ -303,7 +297,7 @@
           {/if}
 
           <button
-            on:click|stopPropagation={handleMoveUp}
+            onclick={(e) => { e.stopPropagation(); onmoveUp?.({ cellId: cell.id }); }}
             class="toolbar-btn"
             title="Move up"
             data-testid="move-up-btn"
@@ -314,7 +308,7 @@
           </button>
 
           <button
-            on:click|stopPropagation={handleMoveDown}
+            onclick={(e) => { e.stopPropagation(); onmoveDown?.({ cellId: cell.id }); }}
             class="toolbar-btn"
             title="Move down"
             data-testid="move-down-btn"
@@ -325,7 +319,7 @@
           </button>
 
           <button
-            on:click|stopPropagation={handleAddCell}
+            onclick={(e) => { e.stopPropagation(); onaddCell?.({ afterCellId: cell.id }); }}
             class="toolbar-btn"
             title="Add cell below"
             data-testid="add-cell-below-btn"
@@ -336,7 +330,7 @@
           </button>
 
           <button
-            on:click|stopPropagation={handleDeleteCell}
+            onclick={(e) => { e.stopPropagation(); ondeleteCell?.({ cellId: cell.id }); }}
             class="toolbar-btn delete-btn"
             title="Delete cell (Ctrl+Z to undo)"
             data-testid="delete-cell-btn"
@@ -357,11 +351,11 @@
             value={cell.content}
             language="javascript"
             height="auto"
-            on:change={handleContentChange}
-            on:run={handleRun}
-            on:runAndAdvance={handleRunAndAdvance}
-            on:editorFocus={handleEditorFocus}
-            on:focus={handleEditorFocus}
+            onchange={(detail) => oncontentChange?.({ cellId: cell.id, content: detail.value })}
+            onrun={handleRun}
+            onrunAndAdvance={handleRunAndAdvance}
+            oneditorFocus={handleEditorFocus}
+            onfocus={handleEditorFocus}
           />
         {:else}
           <div class="markdown-wrapper">
@@ -369,8 +363,12 @@
               <textarea
                 bind:this={markdownTextarea}
                 value={cell.content}
-                on:input={handleMarkdownInput}
-                on:focus={handleEditorFocus}
+                oninput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  autoResizeTextarea(target);
+                  oncontentChange?.({ cellId: cell.id, content: target.value });
+                }}
+                onfocus={handleEditorFocus}
                 class="markdown-editor"
                 placeholder="Enter markdown..."
                 data-testid="markdown-editor"
@@ -379,8 +377,8 @@
               <div
                 class="markdown-preview rendered"
                 bind:this={markdownPreview}
-                on:click|stopPropagation={handleEditMarkdown}
-                on:keydown|stopPropagation={(e) => e.key === 'Enter' && handleEditMarkdown()}
+                onclick={(e) => { e.stopPropagation(); handleEditMarkdown(); }}
+                onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') handleEditMarkdown(); }}
                 tabindex="0"
                 role="button"
                 data-testid="markdown-preview"
@@ -570,7 +568,7 @@
   }
 
   .cell-content {
-    padding: 0.3rem 0.65rem 0.4rem;
+    padding: 0.3rem 0.65rem 0.15rem;
     min-height: 0;
   }
 

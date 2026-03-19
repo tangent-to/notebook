@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { createEventDispatcher } from 'svelte';
+  import { onMount } from 'svelte';
   import { aiService } from '../utils/aiService';
 
-  const dispatch = createEventDispatcher();
+  interface Props {
+    onclose?: () => void;
+    oninsertCode?: (detail: { code: string }) => void;
+  }
+
+  let { onclose, oninsertCode }: Props = $props();
 
   interface Message {
     id: string;
@@ -12,19 +16,17 @@
     timestamp: number;
   }
 
-  let messages: Message[] = [];
-  let inputValue = '';
-  let isLoading = false;
-  let messagesContainer: HTMLDivElement;
-  let apiKey = '';
-  let isConfigured = false;
-  let showSettings = false;
-  let selectedProvider = 'ollama'; // Default to Ollama (free, local)
-  let claudeApiKey = '';
-  let ollamaUrl = 'http://localhost:11434/api';
+  let messages: Message[] = $state([]);
+  let inputValue = $state('');
+  let isLoading = $state(false);
+  let messagesContainer: HTMLDivElement = $state(null as any);
+  let isConfigured = $state(false);
+  let showSettings = $state(false);
+  let selectedProvider = $state('ollama');
+  let claudeApiKey = $state('');
+  let ollamaUrl = $state('http://localhost:11434/api');
 
   onMount(() => {
-    // Load saved settings from localStorage
     const savedProvider = localStorage.getItem('chat_provider');
     const savedClaudeKey = localStorage.getItem('claude_api_key');
     const savedOllamaUrl = localStorage.getItem('ollama_url');
@@ -33,7 +35,6 @@
     if (savedClaudeKey) claudeApiKey = savedClaudeKey;
     if (savedOllamaUrl) ollamaUrl = savedOllamaUrl;
 
-    // Try to configure saved provider
     if (savedProvider === 'claude' && savedClaudeKey) {
       configureProvider('claude', savedClaudeKey);
     } else if (savedProvider === 'ollama') {
@@ -76,7 +77,6 @@
   }
 
   function handleDisconnect() {
-    apiKey = '';
     claudeApiKey = '';
     localStorage.removeItem('chat_provider');
     localStorage.removeItem('claude_api_key');
@@ -98,7 +98,6 @@
     inputValue = '';
     isLoading = true;
 
-    // Scroll to bottom
     setTimeout(scrollToBottom, 0);
 
     try {
@@ -116,7 +115,7 @@
       };
 
       messages = [...messages, assistantMessage];
-    } catch (error) {
+    } catch (error: any) {
       const errorMessage: Message = {
         id: `msg-${Date.now()}-${Math.random()}`,
         role: 'assistant',
@@ -143,23 +142,8 @@
     }
   }
 
-  function insertIntoNotebook(code: string) {
-    dispatch('insertCode', { code });
-  }
-
   function clearChat() {
     messages = [];
-  }
-
-  function authenticateWithGitHub() {
-    // Open GitHub OAuth flow in a new window
-    const clientId = 'Ov23liOnbnxFZWx3yN8W'; // You'll need to register your app
-    const redirectUri = window.location.origin + '/auth/github/callback';
-    const scope = 'read:user';
-
-    const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}`;
-
-    window.open(authUrl, '_blank', 'width=600,height=700');
   }
 </script>
 
@@ -167,13 +151,13 @@
   <div class="chat-header">
     <h2>AI Assistant</h2>
     <div class="header-actions">
-      <button class="icon-btn" on:click={() => showSettings = !showSettings} title="Settings">
+      <button class="icon-btn" onclick={() => showSettings = !showSettings} title="Settings">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
           <path d="M12 1v6m0 6v6M5.6 5.6l4.2 4.2m4.2 4.2l4.2 4.2M1 12h6m6 0h6M5.6 18.4l4.2-4.2m4.2-4.2l4.2-4.2"/>
         </svg>
       </button>
-      <button class="icon-btn" on:click={() => dispatch('close')} title="Close">
+      <button class="icon-btn" onclick={() => onclose?.()} title="Close">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 6L6 18M6 6l12 12"/>
         </svg>
@@ -201,7 +185,7 @@
           </svg>
           <span>Connected to {selectedProvider === 'claude' ? 'Claude' : 'Ollama'}</span>
         </div>
-        <button class="btn-secondary" on:click={handleDisconnect}>Disconnect</button>
+        <button class="btn-secondary" onclick={handleDisconnect}>Disconnect</button>
       {:else}
         <div class="form-group">
           <label for="provider">AI Provider</label>
@@ -242,12 +226,8 @@
         {/if}
 
         <div class="settings-actions">
-          <button class="btn-primary" on:click={handleSettingsSave}>
-            Connect
-          </button>
-          <button class="btn-secondary" on:click={() => showSettings = false}>
-            Cancel
-          </button>
+          <button class="btn-primary" onclick={handleSettingsSave}>Connect</button>
+          <button class="btn-secondary" onclick={() => showSettings = false}>Cancel</button>
         </div>
       {/if}
     </div>
@@ -260,9 +240,7 @@
       </svg>
       <h3>Connect AI Provider</h3>
       <p>Configure an AI provider to start chatting</p>
-      <button class="btn-primary" on:click={() => showSettings = true}>
-        Configure
-      </button>
+      <button class="btn-primary" onclick={() => showSettings = true}>Configure</button>
     </div>
   {:else if isConfigured}
     <div class="chat-content">
@@ -271,13 +249,13 @@
           <div class="empty-chat">
             <p>Start a conversation with the AI assistant</p>
             <div class="suggestions">
-              <button class="suggestion" on:click={() => inputValue = 'Create a bar chart with D3.js'}>
+              <button class="suggestion" onclick={() => inputValue = 'Create a bar chart with D3.js'}>
                 Create a bar chart
               </button>
-              <button class="suggestion" on:click={() => inputValue = 'Load and analyze CSV data with Arquero'}>
+              <button class="suggestion" onclick={() => inputValue = 'Load and analyze CSV data with Arquero'}>
                 Analyze CSV data
               </button>
-              <button class="suggestion" on:click={() => inputValue = 'Create an interactive plot with Observable Plot'}>
+              <button class="suggestion" onclick={() => inputValue = 'Create an interactive plot with Observable Plot'}>
                 Create a plot
               </button>
             </div>
@@ -300,13 +278,11 @@
               {/if}
             </div>
             <div class="message-content">
-              <div class="message-text">
-                {message.content}
-              </div>
+              <div class="message-text">{message.content}</div>
               {#if message.role === 'assistant' && message.content && !message.content.startsWith('Error:')}
                 <button
                   class="insert-btn"
-                  on:click={() => insertIntoNotebook(message.content)}
+                  onclick={() => oninsertCode?.({ code: message.content })}
                   title="Insert into notebook"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -329,9 +305,7 @@
             </div>
             <div class="message-content">
               <div class="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
+                <span></span><span></span><span></span>
               </div>
             </div>
           </div>
@@ -340,7 +314,7 @@
 
       <div class="chat-input-container">
         {#if messages.length > 0}
-          <button class="clear-btn" on:click={clearChat} title="Clear chat">
+          <button class="clear-btn" onclick={clearChat} title="Clear chat">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
             </svg>
@@ -348,15 +322,15 @@
         {/if}
         <textarea
           bind:value={inputValue}
-          on:keydown={handleKeydown}
+          onkeydown={handleKeydown}
           placeholder="Ask anything... (Enter to send, Shift+Enter for new line)"
           class="chat-input"
           rows="1"
           disabled={isLoading}
-        />
+        ></textarea>
         <button
           class="send-btn"
-          on:click={sendMessage}
+          onclick={sendMessage}
           disabled={!inputValue.trim() || isLoading}
           title="Send message"
         >
@@ -443,14 +417,8 @@
     line-height: 1.5;
   }
 
-  .info-box svg {
-    flex-shrink: 0;
-    margin-top: 0.125rem;
-  }
-
-  .info-box p {
-    margin: 0;
-  }
+  .info-box svg { flex-shrink: 0; margin-top: 0.125rem; }
+  .info-box p { margin: 0; }
 
   .info-box code {
     background-color: #dbeafe;
@@ -473,9 +441,7 @@
     margin-bottom: 0.75rem;
   }
 
-  .form-group {
-    margin-bottom: 1rem;
-  }
+  .form-group { margin-bottom: 1rem; }
 
   .form-group label {
     display: block;
@@ -494,14 +460,8 @@
     transition: border-color 0.15s;
   }
 
-  input.input {
-    font-family: 'Fira Code', monospace;
-  }
-
-  select.input {
-    font-family: inherit;
-    cursor: pointer;
-  }
+  input.input { font-family: 'Fira Code', monospace; }
+  select.input { font-family: inherit; cursor: pointer; }
 
   .input:focus {
     outline: none;
@@ -509,25 +469,11 @@
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  .help-text {
-    font-size: 0.75rem;
-    color: #6b7280;
-    margin-top: 0.25rem;
-  }
+  .help-text { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; }
+  .help-text a { color: #3b82f6; text-decoration: none; }
+  .help-text a:hover { text-decoration: underline; }
 
-  .help-text a {
-    color: #3b82f6;
-    text-decoration: none;
-  }
-
-  .help-text a:hover {
-    text-decoration: underline;
-  }
-
-  .settings-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
+  .settings-actions { display: flex; gap: 0.5rem; }
 
   .btn-primary, .btn-secondary {
     padding: 0.5rem 1rem;
@@ -539,28 +485,11 @@
     transition: all 0.15s;
   }
 
-  .btn-primary {
-    background-color: #1a1a1a;
-    color: #ffffff;
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    background-color: #000000;
-  }
-
-  .btn-primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .btn-secondary {
-    background-color: #f3f4f6;
-    color: #1a1a1a;
-  }
-
-  .btn-secondary:hover {
-    background-color: #e5e7eb;
-  }
+  .btn-primary { background-color: #1a1a1a; color: #ffffff; }
+  .btn-primary:hover:not(:disabled) { background-color: #000000; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary { background-color: #f3f4f6; color: #1a1a1a; }
+  .btn-secondary:hover { background-color: #e5e7eb; }
 
   .empty-state {
     display: flex;
@@ -572,52 +501,17 @@
     color: #6b7280;
   }
 
-  .empty-state svg {
-    margin-bottom: 1rem;
-    color: #9ca3af;
-  }
+  .empty-state svg { margin-bottom: 1rem; color: #9ca3af; }
+  .empty-state h3 { font-size: 1rem; font-weight: 600; color: #1a1a1a; margin: 0 0 0.5rem 0; }
+  .empty-state p { font-size: 0.875rem; margin: 0 0 1.5rem 0; }
 
-  .empty-state h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #1a1a1a;
-    margin: 0 0 0.5rem 0;
-  }
+  .chat-content { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+  .messages-container { flex: 1; overflow-y: auto; padding: 1rem; }
 
-  .empty-state p {
-    font-size: 0.875rem;
-    margin: 0 0 1.5rem 0;
-  }
+  .empty-chat { text-align: center; padding: 2rem 1rem; color: #6b7280; }
+  .empty-chat p { margin-bottom: 1.5rem; font-size: 0.875rem; }
 
-  .chat-content {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  .messages-container {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1rem;
-  }
-
-  .empty-chat {
-    text-align: center;
-    padding: 2rem 1rem;
-    color: #6b7280;
-  }
-
-  .empty-chat p {
-    margin-bottom: 1.5rem;
-    font-size: 0.875rem;
-  }
-
-  .suggestions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
+  .suggestions { display: flex; flex-direction: column; gap: 0.5rem; }
 
   .suggestion {
     padding: 0.75rem;
@@ -631,16 +525,9 @@
     transition: all 0.15s;
   }
 
-  .suggestion:hover {
-    background-color: #f9fafb;
-    border-color: #d1d5db;
-  }
+  .suggestion:hover { background-color: #f9fafb; border-color: #d1d5db; }
 
-  .message {
-    display: flex;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-  }
+  .message { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; }
 
   .message-avatar {
     flex-shrink: 0;
@@ -654,15 +541,8 @@
     color: #6b7280;
   }
 
-  .message-user .message-avatar {
-    background-color: #dbeafe;
-    color: #1e40af;
-  }
-
-  .message-content {
-    flex: 1;
-    min-width: 0;
-  }
+  .message-user .message-avatar { background-color: #dbeafe; color: #1e40af; }
+  .message-content { flex: 1; min-width: 0; }
 
   .message-text {
     background-color: #ffffff;
@@ -677,9 +557,7 @@
     border: 1px solid #e5e7eb;
   }
 
-  .message-user .message-text {
-    background-color: #f3f4f6;
-  }
+  .message-user .message-text { background-color: #f3f4f6; }
 
   .insert-btn {
     display: inline-flex;
@@ -697,15 +575,9 @@
     transition: background-color 0.15s;
   }
 
-  .insert-btn:hover {
-    background-color: #000000;
-  }
+  .insert-btn:hover { background-color: #000000; }
 
-  .typing-indicator {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.75rem;
-  }
+  .typing-indicator { display: flex; gap: 0.25rem; padding: 0.75rem; }
 
   .typing-indicator span {
     width: 8px;
@@ -715,23 +587,12 @@
     animation: typing 1.4s infinite;
   }
 
-  .typing-indicator span:nth-child(2) {
-    animation-delay: 0.2s;
-  }
-
-  .typing-indicator span:nth-child(3) {
-    animation-delay: 0.4s;
-  }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
 
   @keyframes typing {
-    0%, 60%, 100% {
-      opacity: 0.3;
-      transform: translateY(0);
-    }
-    30% {
-      opacity: 1;
-      transform: translateY(-8px);
-    }
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-8px); }
   }
 
   .chat-input-container {
@@ -757,10 +618,7 @@
     justify-content: center;
   }
 
-  .clear-btn:hover {
-    background-color: #f3f4f6;
-    color: #1a1a1a;
-  }
+  .clear-btn:hover { background-color: #f3f4f6; color: #1a1a1a; }
 
   .chat-input {
     flex: 1;
@@ -781,10 +639,7 @@
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  .chat-input:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  .chat-input:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .send-btn {
     flex-shrink: 0;
@@ -800,12 +655,6 @@
     justify-content: center;
   }
 
-  .send-btn:hover:not(:disabled) {
-    background-color: #000000;
-  }
-
-  .send-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+  .send-btn:hover:not(:disabled) { background-color: #000000; }
+  .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

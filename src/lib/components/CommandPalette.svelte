@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
   import { onMount } from 'svelte';
 
-  const dispatch = createEventDispatcher();
+  interface Props {
+    visible?: boolean;
+    oncommand?: (detail: { id: string }) => void;
+  }
+
+  let { visible = $bindable(false), oncommand }: Props = $props();
 
   interface Command {
     id: string;
@@ -13,11 +17,9 @@
     action: () => void;
   }
 
-  export let visible = false;
-
-  let searchQuery = '';
-  let selectedIndex = 0;
-  let inputElement: HTMLInputElement;
+  let searchQuery = $state('');
+  let selectedIndex = $state(0);
+  let inputElement: HTMLInputElement = $state(null as any);
 
   const commands: Command[] = [
     {
@@ -26,7 +28,7 @@
       description: 'Create a new empty notebook',
       shortcut: 'Ctrl+N',
       icon: 'file-plus',
-      action: () => dispatch('command', { id: 'new-notebook' })
+      action: () => oncommand?.({ id: 'new-notebook' })
     },
     {
       id: 'open-notebook',
@@ -34,7 +36,7 @@
       description: 'Open an existing notebook file',
       shortcut: 'Ctrl+O',
       icon: 'folder-open',
-      action: () => dispatch('command', { id: 'open-notebook' })
+      action: () => oncommand?.({ id: 'open-notebook' })
     },
     {
       id: 'save-notebook',
@@ -42,14 +44,14 @@
       description: 'Save the current notebook',
       shortcut: 'Ctrl+S',
       icon: 'save',
-      action: () => dispatch('command', { id: 'save-notebook' })
+      action: () => oncommand?.({ id: 'save-notebook' })
     },
     {
       id: 'export-notebook',
       name: 'Export Notebook',
       description: 'Export notebook to various formats',
       icon: 'download',
-      action: () => dispatch('command', { id: 'export-notebook' })
+      action: () => oncommand?.({ id: 'export-notebook' })
     },
     {
       id: 'run-all',
@@ -57,7 +59,7 @@
       description: 'Execute all code cells in sequence',
       shortcut: 'Ctrl+Shift+Enter',
       icon: 'play-circle',
-      action: () => dispatch('command', { id: 'run-all' })
+      action: () => oncommand?.({ id: 'run-all' })
     },
     {
       id: 'add-code-cell',
@@ -65,7 +67,7 @@
       description: 'Insert a new code cell',
       shortcut: 'B',
       icon: 'code',
-      action: () => dispatch('command', { id: 'add-code-cell' })
+      action: () => oncommand?.({ id: 'add-code-cell' })
     },
     {
       id: 'add-markdown-cell',
@@ -73,7 +75,7 @@
       description: 'Insert a new markdown cell',
       shortcut: 'M',
       icon: 'type',
-      action: () => dispatch('command', { id: 'add-markdown-cell' })
+      action: () => oncommand?.({ id: 'add-markdown-cell' })
     },
     {
       id: 'toggle-chat',
@@ -81,14 +83,14 @@
       description: 'Open or close the AI assistant',
       shortcut: 'Ctrl+/',
       icon: 'message-square',
-      action: () => dispatch('command', { id: 'toggle-chat' })
+      action: () => oncommand?.({ id: 'toggle-chat' })
     },
     {
       id: 'clear-outputs',
       name: 'Clear All Outputs',
       description: 'Remove all cell outputs',
       icon: 'x-circle',
-      action: () => dispatch('command', { id: 'clear-outputs' })
+      action: () => oncommand?.({ id: 'clear-outputs' })
     },
     {
       id: 'keyboard-shortcuts',
@@ -96,19 +98,24 @@
       description: 'Show all keyboard shortcuts',
       shortcut: '?',
       icon: 'help-circle',
-      action: () => dispatch('command', { id: 'keyboard-shortcuts' })
+      action: () => oncommand?.({ id: 'keyboard-shortcuts' })
     }
   ];
 
-  $: filteredCommands = commands.filter(cmd =>
-    cmd.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    cmd.description.toLowerCase().includes(searchQuery.toLowerCase())
+  let filteredCommands = $derived(
+    commands.filter(cmd =>
+      cmd.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cmd.description.toLowerCase().includes(searchQuery.toLowerCase())
+    )
   );
 
-  $: if (visible && inputElement) {
-    inputElement.focus();
-    selectedIndex = 0;
-  }
+  // Focus input when palette opens
+  $effect(() => {
+    if (visible && inputElement) {
+      inputElement.focus();
+      selectedIndex = 0;
+    }
+  });
 
   function handleKeydown(event: KeyboardEvent) {
     if (!visible) return;
@@ -166,10 +173,10 @@
   };
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 {#if visible}
-  <div class="palette-backdrop" on:click={handleBackdropClick} on:keydown={handleKeydown} role="dialog" aria-modal="true">
+  <div class="palette-backdrop" onclick={handleBackdropClick} role="dialog" aria-modal="true">
     <div class="palette-container">
       <div class="search-container">
         <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -191,8 +198,8 @@
             <button
               class="command-item"
               class:selected={index === selectedIndex}
-              on:click={() => executeCommand(command)}
-              on:mouseenter={() => selectedIndex = index}
+              onclick={() => executeCommand(command)}
+              onmouseenter={() => selectedIndex = index}
             >
               <div class="command-icon">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,12 +253,8 @@
   }
 
   @keyframes fadeIn {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .palette-container {
@@ -265,14 +268,8 @@
   }
 
   @keyframes slideDown {
-    from {
-      opacity: 0;
-      transform: translateY(-20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   .search-container {
@@ -283,10 +280,7 @@
     gap: 0.75rem;
   }
 
-  .search-icon {
-    color: #9ca3af;
-    flex-shrink: 0;
-  }
+  .search-icon { color: #9ca3af; flex-shrink: 0; }
 
   .search-input {
     flex: 1;
@@ -297,14 +291,9 @@
     background: transparent;
   }
 
-  .search-input::placeholder {
-    color: #9ca3af;
-  }
+  .search-input::placeholder { color: #9ca3af; }
 
-  .commands-container {
-    max-height: 400px;
-    overflow-y: auto;
-  }
+  .commands-container { max-height: 400px; overflow-y: auto; }
 
   .command-item {
     width: 100%;
@@ -320,9 +309,7 @@
   }
 
   .command-item:hover,
-  .command-item.selected {
-    background-color: #f3f4f6;
-  }
+  .command-item.selected { background-color: #f3f4f6; }
 
   .command-icon {
     flex-shrink: 0;
@@ -336,27 +323,12 @@
     color: #6b7280;
   }
 
-  .command-item.selected .command-icon {
-    background-color: #1a1a1a;
-    color: #ffffff;
-  }
+  .command-item.selected .command-icon { background-color: #1a1a1a; color: #ffffff; }
 
-  .command-details {
-    flex: 1;
-    min-width: 0;
-  }
+  .command-details { flex: 1; min-width: 0; }
 
-  .command-name {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #1a1a1a;
-    margin-bottom: 0.125rem;
-  }
-
-  .command-description {
-    font-size: 0.75rem;
-    color: #6b7280;
-  }
+  .command-name { font-size: 0.875rem; font-weight: 500; color: #1a1a1a; margin-bottom: 0.125rem; }
+  .command-description { font-size: 0.75rem; color: #6b7280; }
 
   .command-shortcut {
     flex-shrink: 0;
@@ -369,16 +341,8 @@
     color: #6b7280;
   }
 
-  .no-results {
-    padding: 3rem 1.5rem;
-    text-align: center;
-    color: #9ca3af;
-  }
-
-  .no-results p {
-    font-size: 0.875rem;
-    margin: 0;
-  }
+  .no-results { padding: 3rem 1.5rem; text-align: center; color: #9ca3af; }
+  .no-results p { font-size: 0.875rem; margin: 0; }
 
   .palette-footer {
     padding: 0.75rem 1.25rem;
