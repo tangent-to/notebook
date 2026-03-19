@@ -3,9 +3,24 @@ import type { Notebook } from '../types/notebook';
 const STORAGE_KEY = 'tangent-notebook-autosave';
 const STORAGE_META_KEY = 'tangent-notebook-meta';
 
+function serializableNotebook(notebook: Notebook): Notebook {
+  return {
+    ...notebook,
+    cells: notebook.cells.map(cell => {
+      if (!cell.output) return cell;
+      // DOM elements can't be JSON-serialized (circular refs → throws)
+      // Strip dom outputs; other types are safe strings/objects
+      if (cell.output.type === 'dom') {
+        return { ...cell, output: undefined };
+      }
+      return cell;
+    })
+  };
+}
+
 export function saveToLocalStorage(notebook: Notebook): void {
   try {
-    const data = JSON.stringify(notebook);
+    const data = JSON.stringify(serializableNotebook(notebook));
     localStorage.setItem(STORAGE_KEY, data);
     localStorage.setItem(STORAGE_META_KEY, JSON.stringify({
       savedAt: Date.now(),

@@ -216,7 +216,17 @@
 
     await waitForContainerVisible(container);
 
-    if (!container?.isConnected || !container?.parentNode) return;
+    await initEditor();
+  });
+
+  async function initEditor(attempt = 0) {
+    if (editor) return;
+    if (!container?.isConnected || !container?.parentNode) {
+      if (attempt < 5) {
+        setTimeout(() => initEditor(attempt + 1), 150 * (attempt + 1));
+      }
+      return;
+    }
 
     try {
       editor = monacoLib.editor.create(container, {
@@ -366,51 +376,12 @@
       editorReady = true;
       try { editor.focus(); } catch {}
     } catch (err) {
-      try {
-        console.warn('Monaco editor creation failed:', err);
-        // Retry once after a short delay in case of timing issues
-        setTimeout(async () => {
-          if (editor || !container?.isConnected || !container?.parentNode) return;
-          try {
-            editor = monacoLib.editor.create(container, {
-              value, language, theme, readOnly,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              wordWrap: 'on',
-              lineNumbers: 'on',
-              glyphMargin: false,
-              folding: false,
-              lineDecorationsWidth: 0,
-              lineNumbersMinChars: 4,
-              automaticLayout: true,
-              fontSize: 12,
-              fontFamily: '"Fira Code", Monaco, Menlo, "Ubuntu Mono", monospace',
-              tabSize: 2,
-              insertSpaces: true,
-              scrollbar: { vertical: 'auto', horizontal: 'auto', useShadows: false, verticalScrollbarSize: 10, horizontalScrollbarSize: 10, alwaysConsumeMouseWheel: false },
-              padding: { top: 4, bottom: 4 }
-            });
-            editor.onDidChangeModelContent(() => {
-              const newValue = editor.getValue();
-              if (newValue !== value) onchange?.({ value: newValue });
-              if (height === 'auto') scheduleHeightSync([80]);
-            });
-            contentSizeDisposable = editor.onDidContentSizeChange((e: any) => {
-              if (height !== 'auto') return;
-              const h = e?.contentHeight;
-              if (h != null && Number.isFinite(h) && h > 0) applyEditorHeight(h);
-              else applyEditorHeight(getContentHeight());
-              editor.layout();
-            });
-            if (height === 'auto') { applyEditorHeight(getContentHeight()); editor.layout(); }
-            editorReady = true;
-          } catch (retryErr) {
-            console.warn('Monaco editor retry failed:', retryErr);
-          }
-        }, 300);
-      } catch {}
+      console.warn('Monaco editor creation failed:', err);
+      if (attempt < 3) {
+        setTimeout(() => initEditor(attempt + 1), 300 * (attempt + 1));
+      }
     }
-  });
+  }
 
   async function triggerAICompletion() {
     if (!editor || !aiService.isConfigured() || !monacoLib) return;
