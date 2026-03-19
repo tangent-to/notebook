@@ -473,9 +473,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.4rem 0.6rem;
-    margin-bottom: 0.4rem;
-    border-bottom: 1px solid #ebebeb;
+    padding: 0.3rem 0.6rem 0.2rem;
   }
 
   .toolbar-left,

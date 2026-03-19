@@ -20,8 +20,26 @@
   let removePointerListener: (() => void) | null = null;
   let contentSizeDisposable: { dispose: () => void } | null = null;
   const MIN_HEIGHT = 20;
-  const MAX_HEIGHT = 700;
   const HEIGHT_PADDING = 6;
+
+  function getContentHeight(): number {
+    try {
+      if (!editor) return MIN_HEIGHT;
+      // Monaco's own measurement accounts for word-wrap, font size, etc.
+      const h = typeof editor.getContentHeight === 'function'
+        ? editor.getContentHeight()
+        : undefined;
+      if (h != null && Number.isFinite(h) && h > 0) return h;
+    } catch {
+      // fall through to minimum
+    }
+    return MIN_HEIGHT;
+  }
+
+  function applyEditorHeight(px: number) {
+    const padded = Math.max(0, px) + HEIGHT_PADDING;
+    editorHeight = `${Math.max(MIN_HEIGHT, Math.round(padded))}px`;
+  }
 
   function scheduleHeightSync(delays: number[] = [0, 80, 200, 400]) {
     if (height !== 'auto') return;
@@ -29,47 +47,13 @@
       setTimeout(() => {
         if (!editor) return;
         try {
-          applyEditorHeight(calculatePreferredHeight());
+          applyEditorHeight(getContentHeight());
           editor.layout();
         } catch {
           // ignore measurement failures
         }
       }, delay);
     });
-  }
-
-  function calculatePreferredHeight(): number {
-    try {
-      if (!editor) return MIN_HEIGHT;
-      const model = editor.getModel ? editor.getModel() : null;
-      const lineCount = model && typeof model.getLineCount === 'function'
-        ? Math.max(model.getLineCount(), 1)
-        : 1;
-
-      let lineHeight = editor.getConfiguration?.().lineHeight;
-      if ((!lineHeight || !Number.isFinite(lineHeight)) && monacoLib?.editor?.EditorOption !== undefined) {
-        try {
-          const optionKey = monacoLib.editor.EditorOption.lineHeight;
-          lineHeight = editor.getOption?.(optionKey) || lineHeight;
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      if (!lineHeight || !Number.isFinite(lineHeight)) {
-        lineHeight = 20;
-      }
-
-      const estimated = (lineCount + 1) * lineHeight;
-      return Math.max(estimated, MIN_HEIGHT);
-    } catch (_) {
-      return MIN_HEIGHT;
-    }
-  }
-
-  function applyEditorHeight(px: number) {
-    const padded = Math.max(0, px) + HEIGHT_PADDING;
-    const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(padded)));
-    editorHeight = `${clamped}px`;
   }
 
   function patchCaretRangeFallback(doc: Document | null | undefined) {
@@ -182,6 +166,8 @@
           error(...args: any[]): void;
           warn(...args: any[]): void;
         };
+        /** Shared notebook scope. Write: \`nb.x = 42\`  Read: \`const { x } = nb\` */
+        declare const nb: Record<string, any>;
       `, 'global.d.ts');
     }
 
@@ -260,18 +246,27 @@
           dispatch('change', { value: newValue });
         }
 
-        // Update height based on content
-        if (height === 'auto') scheduleHeightSync([0, 80, 200]);
+        // Height is updated via onDidContentSizeChange; schedule a fallback
+        // sync in case the content-size event fires before the model settles.
+        if (height === 'auto') scheduleHeightSync([80]);
       });
 
       contentSizeDisposable = editor.onDidContentSizeChange((e: any) => {
-        if (height === 'auto') scheduleHeightSync([0, 120]);
+        if (height !== 'auto') return;
+        // Use Monaco's exact content height from the event — no estimation needed.
+        const h = e?.contentHeight;
+        if (h != null && Number.isFinite(h) && h > 0) {
+          applyEditorHeight(h);
+        } else {
+          applyEditorHeight(getContentHeight());
+        }
+        editor.layout();
       });
 
       // Initial height calculation
       if (height === 'auto') {
         const syncHeights = () => {
-          applyEditorHeight(calculatePreferredHeight());
+          applyEditorHeight(getContentHeight());
           editor.layout();
         };
         syncHeights();
@@ -466,9 +461,10 @@
   // Update editor value when prop changes
   $: if (editor && value !== editor.getValue()) {
     editor.setValue(value);
+    // onDidContentSizeChange will fire and resize; this is just a safety fallback.
     if (height === 'auto') {
       setTimeout(() => {
-        applyEditorHeight(calculatePreferredHeight());
+        applyEditorHeight(getContentHeight());
         editor.layout();
       }, 0);
     }
@@ -502,8 +498,6 @@
 
 <style>
   .monaco-editor-container {
-    border: 1px solid #e5e7eb;
-    border-radius: 0.375rem;
     min-height: 20px;
     transition: height 0.1s ease;
   }

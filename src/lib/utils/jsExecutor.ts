@@ -30,8 +30,11 @@ export class JavaScriptExecutor {
   private setupExecutionEnvironment() {
     (window as any).__tangent_loadedModules =
       (window as any).__tangent_loadedModules || {};
-    // Expose shared scope on window so cells can access it
+    // Expose shared scope on window so cells can access it.
+    // `nb` is the short public alias: write with `nb.x = 42`, read with
+    // `const { x } = nb` or `nb.x`.
     (window as any).__tangent_scope = this.scope;
+    (window as any).nb = this.scope;
     // Install the AMD guard so dynamically injected scripts don't conflict
     // with Monaco Editor's RequireJS loader.
     this.installAmdGuard();
@@ -237,17 +240,18 @@ export class JavaScriptExecutor {
           execBody = code;
         }
 
-        // Execute in global scope using indirect eval so top-level await remains supported.
-        // Capture the IIFE's resolved value so that `return <expr>` in a cell displays output.
+        // Hoist top-level declarations into the shared scope and wrap execution
+        // in `with(scope)` so prior-cell variables are readable as plain names.
+        const transformedBody = this.transformForScope(execBody);
         const globalEval = (0, eval) as (s: string) => any;
-        const wrapped = `(async () => {\n${execBody}\n})()`;
+        const wrapped = `(async () => { with(window.__tangent_scope) {\n${transformedBody}\n} })()`;
         const iifeResult = globalEval(wrapped);
         let returnedValue: any = undefined;
         if (iifeResult && typeof iifeResult.then === "function") {
           returnedValue = await iifeResult;
         }
 
-        // Sync scope: capture top-level const/let/var declarations
+        // Sync scope: fallback for destructuring declarations not handled by transformForScope
         this.syncScopeFromGlobals(code);
 
         // After execution, prefer DOM outputs that libraries appended to the outputDiv.
@@ -334,6 +338,42 @@ export class JavaScriptExecutor {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Transform top-level declarations so they write into the shared scope,
+   * making variables declared in one cell readable as plain names in the next.
+   *
+   * Rules (applied to lines at column 0 — top-level heuristic):
+   *   const x = expr   →  window.__tangent_scope.x = expr
+   *   let   x = expr   →  window.__tangent_scope.x = expr
+   *   var   x = expr   →  window.__tangent_scope.x = expr
+   *   function foo() {} → (unchanged) + appends: scope.foo = foo
+   *
+   * Destructuring declarations (const { a } = …) and class declarations are
+   * left untransformed and stay private to the cell.
+   */
+  private transformForScope(code: string): string {
+    // Replace `const/let/var name =` with a direct scope write.
+    // Matches only at column 0 (no leading whitespace) to avoid
+    // rewriting declarations inside function bodies or blocks.
+    const transformed = code.replace(
+      /^(const|let|var)\s+([\w$]+)(\s*=)/gm,
+      'window.__tangent_scope.$2$3',
+    );
+
+    // Function declarations hoist to the IIFE scope; copy into shared scope
+    // after they are defined so subsequent cells can call them by name.
+    const funcNames: string[] = [];
+    for (const m of code.matchAll(/^function\s+([\w$]+)\s*\(/gm)) {
+      funcNames.push(m[1]);
+    }
+    if (funcNames.length === 0) return transformed;
+
+    const syncs = funcNames
+      .map(n => `if (typeof ${n} !== 'undefined') window.__tangent_scope.${n} = ${n};`)
+      .join('\n');
+    return `${transformed}\n${syncs}`;
   }
 
   /**
@@ -441,11 +481,12 @@ export class JavaScriptExecutor {
         funcBody = codeWithoutImports;
       }
 
-      const asyncIIFE = `(async () => {\n${funcBody}\n})()`;
+      const transformedBody = this.transformForScope(funcBody);
+      const asyncIIFE = `(async () => { with(window.__tangent_scope) {\n${transformedBody}\n} })()`;
       const globalEval = (0, eval) as (s: string) => any;
       const returnedValue = await globalEval(asyncIIFE);
 
-      // Sync scope
+      // Sync scope: fallback for destructuring declarations
       this.syncScopeFromGlobals(codeWithoutImports);
 
       // Use __tangent_last (last-expression capture) or the IIFE's return value

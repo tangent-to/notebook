@@ -219,9 +219,8 @@
 
 <style>
   .output-container {
-    margin-top: 0.75rem;
-    border-top: 1px solid #ededed;
-    padding-top: 0.6rem;
+    margin-top: 0.5rem;
+    padding-top: 0.4rem;
   }
 
   .output-content {
@@ -281,10 +280,10 @@
     white-space: pre-wrap;
     word-break: break-word;
     margin: 0;
-    padding: 0.6rem 0.85rem;
-    background-color: #fafafa;
-    border-radius: 5px;
-    border: 1px solid #e8e8e8;
+    padding: 0.4rem 0.85rem;
+    background-color: transparent;
+    border-radius: 0;
+    border: none;
     line-height: 1.5;
   }
 
@@ -295,10 +294,10 @@
   .json-tree {
     font-size: 0.825rem;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    background-color: #fafafa;
-    border-radius: 5px;
-    border: 1px solid #e8e8e8;
-    padding: 0.4rem 0.6rem;
+    background-color: transparent;
+    border-radius: 0;
+    border: none;
+    padding: 0.4rem 0.85rem;
     overflow-x: auto;
   }
 
@@ -384,34 +383,32 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0 0.25rem;
+    gap: 0.5rem;
+    padding: 0.1rem 0.5rem 0.25rem;
   }
 
   .output-timestamp {
-    font-size: 0.75rem;
-    color: #9ca3af;
+    font-size: 0.7rem;
+    color: #c0c0c0;
   }
 
   .copy-btn {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.15rem 0.45rem;
+    gap: 0.25rem;
+    padding: 0.1rem 0.35rem;
     background: transparent;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    color: #6b7280;
+    border: none;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    color: #c0c0c0;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease;
     font-family: inherit;
   }
 
   .copy-btn:hover {
-    background-color: #f3f4f6;
-    border-color: #9ca3af;
-    color: #1a1a1a;
+    color: #6b7280;
   }
 
   .error-header .copy-btn {
