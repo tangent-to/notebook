@@ -85,6 +85,9 @@
     if (target && target.closest('.jmon-music-player-container')) {
       return;
     }
+    if (target && (target.closest('select') || target.tagName === 'SELECT')) {
+      return;
+    }
     onselect?.({ cellId: cell.id });
     if (cell.type === 'code' && editorRef) {
       requestAnimationFrame(() => {
@@ -255,7 +258,9 @@
 
           <select
             value={cell.type}
-            onchange={(e) => ontypeChange?.({ cellId: cell.id, type: (e.target as HTMLSelectElement).value as 'code' | 'markdown' })}
+            onchange={(e) => { e.stopPropagation(); ontypeChange?.({ cellId: cell.id, type: (e.target as HTMLSelectElement).value as 'code' | 'markdown' }); }}
+            onclick={(e) => e.stopPropagation()}
+            onmousedown={(e) => e.stopPropagation()}
             class="cell-type-select"
             data-testid="cell-type-select"
           >
